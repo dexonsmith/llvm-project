@@ -97,6 +97,12 @@ public:
   /// are found.
   const DirectoryEntry *Directory = nullptr;
 
+  /// The relative path from the root module directory to Directory.  This is
+  /// empty unless the primary module map has an 'extern module' declaration
+  /// and this module was defined in a module map file in a different
+  /// directory.
+  std::string RelativePathFromRootModuleDirectory;
+
   /// The presumed file name for the module map defining this module.
   /// Only non-empty when building from preprocessed source.
   std::string PresumedModuleMapFile;

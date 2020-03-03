@@ -681,6 +681,9 @@ public:
   /// \param HomeDir The directory in which relative paths within this module
   ///        map file will be resolved.
   ///
+  /// \param RelativePathToHomeDir The relative path from the module build
+  /// directory to HomeDir.
+  ///
   /// \param ID The FileID of the file to process, if we've already entered it.
   ///
   /// \param Offset [inout] On input the offset at which to start parsing. On
@@ -693,7 +696,8 @@ public:
   bool parseModuleMapFile(const FileEntry *File, bool IsSystem,
                           const DirectoryEntry *HomeDir,
                           FileID ID = FileID(), unsigned *Offset = nullptr,
-                          SourceLocation ExternModuleLoc = SourceLocation());
+                          SourceLocation ExternModuleLoc = SourceLocation(),
+                          StringRef RelativePathToHomeDir = "");
 
   /// Dump the contents of the module map, for debugging purposes.
   void dump();

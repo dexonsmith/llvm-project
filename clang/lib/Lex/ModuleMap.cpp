@@ -262,6 +262,12 @@ void ModuleMap::resolveHeader(Module *Mod,
         // Record this umbrella header.
         setUmbrellaHeader(Mod, File, Header.FileName, RelativePathName.str());
     } else {
+      if (!Mod->RelativePathFromRootModuleDirectory.empty() &&
+          llvm::sys::path::is_relative(RelativePathName)) {
+        SmallString<128> Temp = std::move(RelativePathName);
+        RelativePathName = Mod->RelativePathFromRootModuleDirectory;
+        llvm::sys::path::append(RelativePathName, Temp);
+      }
       Module::Header H = {Header.FileName, std::string(RelativePathName.str()), File};
       if (Header.Kind == Module::HK_Excluded)
         excludeHeader(Mod, H);
@@ -1418,6 +1424,10 @@ namespace clang {
     /// be resolved relative to.
     const DirectoryEntry *Directory;
 
+    /// The relative path from the module build directory to home directory
+    /// where this module references headers from.
+    std::string RelativePathToHomeDir;
+
     /// Whether this module map is in a system header directory.
     bool IsSystem;
 
@@ -1482,10 +1492,11 @@ namespace clang {
     explicit ModuleMapParser(Lexer &L, SourceManager &SourceMgr,
                              const TargetInfo *Target, DiagnosticsEngine &Diags,
                              ModuleMap &Map, const FileEntry *ModuleMapFile,
-                             const DirectoryEntry *Directory, bool IsSystem)
+                             const DirectoryEntry *Directory, bool IsSystem,
+                             StringRef RelativePathToHomeDir)
         : L(L), SourceMgr(SourceMgr), Target(Target), Diags(Diags), Map(Map),
           ModuleMapFile(ModuleMapFile), Directory(Directory),
-          IsSystem(IsSystem) {
+          RelativePathToHomeDir(RelativePathToHomeDir), IsSystem(IsSystem) {
       Tok.clear();
       consumeToken();
     }
@@ -1992,6 +2003,7 @@ void ModuleMapParser::parseModuleDecl() {
   }
 
   ActiveModule->DefinitionLoc = ModuleNameLoc;
+  ActiveModule->RelativePathFromRootModuleDirectory = RelativePathToHomeDir;
   if (Attrs.IsSystem || IsSystem)
     ActiveModule->IsSystem = true;
   if (Attrs.IsExternC)
@@ -2157,11 +2169,20 @@ void ModuleMapParser::parseExternModuleDecl() {
   consumeToken(); // filename
 
   StringRef FileNameRef = FileName;
+  StringRef RelativePathToModuleMapDirRef = RelativePathToHomeDir;
+  SmallString<128> RelativePathToModuleMapDir;
   SmallString<128> ModuleMapFileName;
   if (llvm::sys::path::is_relative(FileNameRef)) {
     ModuleMapFileName += Directory->getName();
     llvm::sys::path::append(ModuleMapFileName, FileName);
     FileNameRef = ModuleMapFileName;
+
+    if (!Map.HeaderInfo.getHeaderSearchOpts().ModuleMapFileHomeIsCwd) {
+      RelativePathToModuleMapDir += RelativePathToHomeDir;
+      llvm::sys::path::append(RelativePathToModuleMapDir, FileName);
+      llvm::sys::path::remove_filename(RelativePathToModuleMapDir);
+      RelativePathToModuleMapDirRef = RelativePathToModuleMapDir;
+    }
   }
   if (auto File = SourceMgr.getFileManager().getFile(FileNameRef))
     Map.parseModuleMapFile(
@@ -2169,7 +2190,7 @@ void ModuleMapParser::parseExternModuleDecl() {
         Map.HeaderInfo.getHeaderSearchOpts().ModuleMapFileHomeIsCwd
             ? Directory
             : (*File)->getDir(),
-        FileID(), nullptr, ExternLoc);
+        FileID(), nullptr, ExternLoc, RelativePathToModuleMapDirRef);
 }
 
 /// Whether to add the requirement \p Feature to the module \p M.
@@ -2993,7 +3014,8 @@ bool ModuleMapParser::parseModuleMapFile() {
 bool ModuleMap::parseModuleMapFile(const FileEntry *File, bool IsSystem,
                                    const DirectoryEntry *Dir, FileID ID,
                                    unsigned *Offset,
-                                   SourceLocation ExternModuleLoc) {
+                                   SourceLocation ExternModuleLoc,
+                                   StringRef RelativePathToHomeDir) {
   assert(Target && "Missing target information");
   llvm::DenseMap<const FileEntry *, bool>::iterator Known
     = ParsedModuleMap.find(File);
@@ -3021,7 +3043,7 @@ bool ModuleMap::parseModuleMapFile(const FileEntry *File, bool IsSystem,
           Buffer->getBufferEnd());
   SourceLocation Start = L.getSourceLocation();
   ModuleMapParser Parser(L, SourceMgr, Target, Diags, *this, File, Dir,
-                         IsSystem);
+                         IsSystem, RelativePathToHomeDir);
   bool Result = Parser.parseModuleMapFile();
   ParsedModuleMap[File] = Result;
 
