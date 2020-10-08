@@ -219,8 +219,6 @@ public:
 
   llvm::ErrorOr<llvm::vfs::Status> status() override { return Stat; }
 
-  const llvm::MemoryBuffer *getBufferPtr() const { return Buffer.get(); }
-
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBuffer(const Twine &Name, int64_t FileSize, bool RequiresNullTerminator,
             bool IsVolatile) override {
@@ -248,7 +246,7 @@ createFile(const CachedFileSystemEntry *Entry,
                                        /*RequiresNullTerminator=*/false),
       *Entry->getStatus());
   if (!Entry->getPPSkippedRangeMapping().empty() && PPSkipMappings)
-    (*PPSkipMappings)[Result->getBufferPtr()] =
+    (*PPSkipMappings)[Result->Buffer->getBufferStart()] =
         &Entry->getPPSkippedRangeMapping();
   return llvm::ErrorOr<std::unique_ptr<llvm::vfs::File>>(
       std::unique_ptr<llvm::vfs::File>(std::move(Result)));
