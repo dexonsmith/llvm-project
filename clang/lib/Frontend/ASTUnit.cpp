@@ -1466,7 +1466,7 @@ StringRef ASTUnit::getMainFileName() const {
     if (Input.isFile())
       return Input.getFile();
     else
-      return Input.getBuffer()->getBufferIdentifier();
+      return Input.getBuffer().getBufferIdentifier();
   }
 
   if (SourceMgr) {

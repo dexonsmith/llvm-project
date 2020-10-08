@@ -41,7 +41,7 @@ unsigned getOffsetAfterTokenSequence(
         GetOffsetAfterSequence) {
   SourceManagerForFile VirtualSM(FileName, Code);
   SourceManager &SM = VirtualSM.get();
-  Lexer Lex(SM.getMainFileID(), SM.getBuffer(SM.getMainFileID()), SM,
+  Lexer Lex(SM.getMainFileID(), SM.getBufferOrFake(SM.getMainFileID()), SM,
             createLangOpts());
   Token Tok;
   // Get the first token.

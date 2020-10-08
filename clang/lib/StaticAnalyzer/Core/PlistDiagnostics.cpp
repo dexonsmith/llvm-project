@@ -1011,11 +1011,11 @@ static MacroNameAndArgs getMacroNameAndArgs(SourceLocation ExpanLoc,
   // First, we create a Lexer to lex *at the expansion location* the tokens
   // referring to the macro's name and its arguments.
   std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(ExpanLoc);
-  const llvm::MemoryBuffer *MB = SM.getBuffer(LocInfo.first);
-  const char *MacroNameTokenPos = MB->getBufferStart() + LocInfo.second;
+  llvm::MemoryBufferRef MB = SM.getBufferOrFake(LocInfo.first);
+  const char *MacroNameTokenPos = MB.getBufferStart() + LocInfo.second;
 
   Lexer RawLexer(SM.getLocForStartOfFile(LocInfo.first), LangOpts,
-                 MB->getBufferStart(), MacroNameTokenPos, MB->getBufferEnd());
+                 MB.getBufferStart(), MacroNameTokenPos, MB.getBufferEnd());
 
   // Acquire the macro's name.
   Token TheTok;

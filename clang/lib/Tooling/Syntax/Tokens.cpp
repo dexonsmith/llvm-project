@@ -262,7 +262,7 @@ std::vector<syntax::Token> syntax::tokenize(FileID FID, const SourceManager &SM,
     Tokens.push_back(syntax::Token(T));
   };
 
-  Lexer L(FID, SM.getBuffer(FID), SM, LO);
+  Lexer L(FID, SM.getBufferOrFake(FID), SM, LO);
 
   clang::Token T;
   while (!L.LexFromRawLexer(T))

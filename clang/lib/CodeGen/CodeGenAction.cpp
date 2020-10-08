@@ -1025,11 +1025,10 @@ void CodeGenAction::ExecuteAction() {
     if (BA != Backend_EmitNothing && !OS)
       return;
 
-    bool Invalid;
     SourceManager &SM = CI.getSourceManager();
     FileID FID = SM.getMainFileID();
-    const llvm::MemoryBuffer *MainFile = SM.getBuffer(FID, &Invalid);
-    if (Invalid)
+    llvm::Optional<llvm::MemoryBufferRef> MainFile = SM.getBuffer(FID);
+    if (!MainFile)
       return;
 
     TheModule = loadModule(*MainFile);
@@ -1044,8 +1043,7 @@ void CodeGenAction::ExecuteAction() {
       TheModule->setTargetTriple(TargetOpts.Triple);
     }
 
-    EmbedBitcode(TheModule.get(), CI.getCodeGenOpts(),
-                 MainFile->getMemBufferRef());
+    EmbedBitcode(TheModule.get(), CI.getCodeGenOpts(), *MainFile);
 
     LLVMContext &Ctx = TheModule->getContext();
     Ctx.setInlineAsmDiagnosticHandler(BitcodeInlineAsmDiagHandler,

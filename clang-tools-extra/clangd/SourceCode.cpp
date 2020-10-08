@@ -452,9 +452,9 @@ llvm::Optional<SourceRange> toHalfOpenFileRange(const SourceManager &SM,
 
 llvm::StringRef toSourceCode(const SourceManager &SM, SourceRange R) {
   assert(isValidFileRange(SM, R));
-  bool Invalid = false;
-  auto *Buf = SM.getBuffer(SM.getFileID(R.getBegin()), &Invalid);
-  assert(!Invalid);
+  llvm::Optional<llvm::MemoryBufferRef> Buf =
+      SM.getBuffer(SM.getFileID(R.getBegin()));
+  assert(Buf);
 
   size_t BeginOffset = SM.getFileOffset(R.getBegin());
   size_t EndOffset = SM.getFileOffset(R.getEnd());
@@ -463,7 +463,7 @@ llvm::StringRef toSourceCode(const SourceManager &SM, SourceRange R) {
 
 llvm::Expected<SourceLocation> sourceLocationInMainFile(const SourceManager &SM,
                                                         Position P) {
-  llvm::StringRef Code = SM.getBuffer(SM.getMainFileID())->getBuffer();
+  llvm::StringRef Code = SM.getBufferOrFake(SM.getMainFileID())->getBuffer();
   auto Offset =
       positionToOffset(Code, P, /*AllowColumnBeyondLineLength=*/false);
   if (!Offset)
@@ -613,7 +613,8 @@ static void lex(llvm::StringRef Code, const format::FormatStyle &Style,
   SourceManagerForFile FileSM("dummy.cpp", NullTerminatedCode);
   auto &SM = FileSM.get();
   auto FID = SM.getMainFileID();
-  Lexer Lex(FID, SM.getBuffer(FID), SM, format::getFormattingLangOpts(Style));
+  Lexer Lex(FID, SM.getBufferOrFake(FID), SM,
+            format::getFormattingLangOpts(Style));
   Token Tok;
 
   while (!Lex.LexFromRawLexer(Tok))

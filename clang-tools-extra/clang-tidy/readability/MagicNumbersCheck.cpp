@@ -159,10 +159,7 @@ bool MagicNumbersCheck::isSyntheticValue(const SourceManager *SourceManager,
   if (FileOffset.first.isInvalid())
     return false;
 
-  const StringRef BufferIdentifier =
-      SourceManager->getBuffer(FileOffset.first)->getBufferIdentifier();
-
-  return BufferIdentifier.empty();
+  return SourceManager->getBufferIdentifierOrEmpty(FileOffset.first).empty();
 }
 
 } // namespace readability

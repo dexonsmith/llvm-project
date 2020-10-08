@@ -31,27 +31,37 @@ static bool skipIfAtLineEnd(const char *&P) {
   return false;
 }
 
+line_iterator::line_iterator(const MemoryBufferRef &Buffer, bool SkipBlanks,
+                             char CommentMarker)
+    : line_iterator(StringRef(Buffer.getBufferStart(), Buffer.getBufferSize()),
+                    SkipBlanks, CommentMarker) {}
+
 line_iterator::line_iterator(const MemoryBuffer &Buffer, bool SkipBlanks,
                              char CommentMarker)
-    : Buffer(Buffer.getBufferSize() ? &Buffer : nullptr),
+    : line_iterator(StringRef(Buffer.getBufferStart(), Buffer.getBufferSize()),
+                    SkipBlanks, CommentMarker) {}
+
+line_iterator::line_iterator(StringRef Buffer, bool SkipBlanks,
+                             char CommentMarker)
+    : Buffer(Buffer.empty() ? Optional<StringRef>(None) : Buffer),
       CommentMarker(CommentMarker), SkipBlanks(SkipBlanks), LineNumber(1),
-      CurrentLine(Buffer.getBufferSize() ? Buffer.getBufferStart() : nullptr,
-                  0) {
+      CurrentLine(Buffer.empty() ? nullptr : Buffer.begin(), 0) {
   // Ensure that if we are constructed on a non-empty memory buffer that it is
   // a null terminated buffer.
-  if (Buffer.getBufferSize()) {
-    assert(Buffer.getBufferEnd()[0] == '\0');
-    // Make sure we don't skip a leading newline if we're keeping blanks
-    if (SkipBlanks || !isAtLineEnd(Buffer.getBufferStart()))
-      advance();
-  }
+  if (Buffer.empty())
+    return;
+
+  assert(Buffer.end()[0] == '\0');
+  // Make sure we don't skip a leading newline if we're keeping blanks
+  if (SkipBlanks || !isAtLineEnd(Buffer.begin()))
+    advance();
 }
 
 void line_iterator::advance() {
   assert(Buffer && "Cannot advance past the end!");
 
   const char *Pos = CurrentLine.end();
-  assert(Pos == Buffer->getBufferStart() || isAtLineEnd(Pos) || *Pos == '\0');
+  assert(Pos == Buffer->begin() || isAtLineEnd(Pos) || *Pos == '\0');
 
   if (skipIfAtLineEnd(Pos))
     ++LineNumber;
@@ -78,7 +88,7 @@ void line_iterator::advance() {
 
   if (*Pos == '\0') {
     // We've hit the end of the buffer, reset ourselves to the end state.
-    Buffer = nullptr;
+    Buffer = None;
     CurrentLine = StringRef();
     return;
   }
