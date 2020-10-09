@@ -305,22 +305,20 @@ static bool IsNOLINTFound(StringRef NolintDirectiveText, StringRef Line,
 
 static llvm::Optional<StringRef> getBuffer(const SourceManager &SM, FileID File,
                                            bool AllowIO) {
+  if (AllowIO)
+    return SM.getBufferDataOrNone(File);
+
   // This is similar to the implementation of SourceManager::getBufferData(),
-  // but uses ContentCache::getRawBuffer() rather than getBuffer() if
-  // AllowIO=false, to avoid triggering file I/O if the file contents aren't
-  // already mapped.
+  // but uses ContentCache::getRawBuffer() rather than getBuffer() to avoid
+  // triggering file I/O if the file contents aren't already mapped.
   bool CharDataInvalid = false;
   const SrcMgr::SLocEntry &Entry = SM.getSLocEntry(File, &CharDataInvalid);
   if (CharDataInvalid || !Entry.isFile())
     return llvm::None;
   const SrcMgr::ContentCache *Cache = Entry.getFile().getContentCache();
-  const llvm::MemoryBuffer *Buffer =
-      AllowIO ? Cache->getBuffer(SM.getDiagnostics(), SM.getFileManager(),
-                                 SourceLocation(), &CharDataInvalid)
-              : Cache->getRawBuffer();
-  if (!Buffer || CharDataInvalid)
-    return llvm::None;
-  return Buffer->getBuffer();
+  if (const llvm::MemoryBuffer *Buffer = Cache->getRawBuffer())
+    Buffer->getBuffer();
+  return llvm::None;
 }
 
 static bool LineIsMarkedWithNOLINT(const SourceManager &SM, SourceLocation Loc,

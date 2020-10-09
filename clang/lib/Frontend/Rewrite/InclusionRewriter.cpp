@@ -40,7 +40,7 @@ class InclusionRewriter : public PPCallbacks {
   SourceManager &SM; ///< Used to read and manage source files.
   raw_ostream &OS; ///< The destination stream for rewritten contents.
   StringRef MainEOL; ///< The line ending marker to use.
-  const llvm::MemoryBuffer *PredefinesBuffer; ///< The preprocessor predefines.
+  Optional<MemoryBufferRef> PredefinesBuffer; ///< The preprocessor predefines.
   bool ShowLineMarkers; ///< Show #line markers.
   bool UseLineDirectives; ///< Use of line directives or line markers.
   /// Tracks where inclusions that change the file are found.
@@ -59,7 +59,7 @@ public:
                     bool UseLineDirectives);
   void Process(FileID FileId, SrcMgr::CharacteristicKind FileType,
                const DirectoryLookup *DirLookup);
-  void setPredefinesBuffer(const llvm::MemoryBuffer *Buf) {
+  void setPredefinesBuffer(Optional<MemoryBufferRef> Buf) {
     PredefinesBuffer = Buf;
   }
   void detectMainFileEOL();
@@ -88,12 +88,11 @@ private:
                      SrcMgr::CharacteristicKind FileType,
                      StringRef Extra = StringRef());
   void WriteImplicitModuleImport(const Module *Mod);
-  void OutputContentUpTo(const MemoryBuffer &FromFile,
-                         unsigned &WriteFrom, unsigned WriteTo,
-                         StringRef EOL, int &lines,
+  void OutputContentUpTo(MemoryBufferRef FromFile, unsigned &WriteFrom,
+                         unsigned WriteTo, StringRef EOL, int &lines,
                          bool EnsureNewline);
   void CommentOutDirective(Lexer &DirectivesLex, const Token &StartToken,
-                           const MemoryBuffer &FromFile, StringRef EOL,
+                           MemoryBufferRef FromFile, StringRef EOL,
                            unsigned &NextToWrite, int &Lines);
   const IncludedFile *FindIncludeAtLocation(SourceLocation Loc) const;
   const Module *FindModuleAtLocation(SourceLocation Loc) const;
@@ -109,8 +108,7 @@ InclusionRewriter::InclusionRewriter(Preprocessor &PP, raw_ostream &OS,
                                      bool ShowLineMarkers,
                                      bool UseLineDirectives)
     : PP(PP), SM(PP.getSourceManager()), OS(OS), MainEOL("\n"),
-      PredefinesBuffer(nullptr), ShowLineMarkers(ShowLineMarkers),
-      UseLineDirectives(UseLineDirectives),
+      ShowLineMarkers(ShowLineMarkers), UseLineDirectives(UseLineDirectives),
       LastInclusionLocation(SourceLocation()) {}
 
 /// Write appropriate line information as either #line directives or GNU line
@@ -263,7 +261,7 @@ bool InclusionRewriter::IsIfAtLocationTrue(SourceLocation Loc) const {
 
 /// Detect the likely line ending style of \p FromFile by examining the first
 /// newline found within it.
-static StringRef DetectEOL(const MemoryBuffer &FromFile) {
+static StringRef DetectEOL(MemoryBufferRef FromFile) {
   // Detect what line endings the file uses, so that added content does not mix
   // the style. We need to check for "\r\n" first because "\n\r" will match
   // "\r\n\r\n".
@@ -278,23 +276,21 @@ static StringRef DetectEOL(const MemoryBuffer &FromFile) {
 }
 
 void InclusionRewriter::detectMainFileEOL() {
-  bool Invalid;
-  const MemoryBuffer &FromFile = *SM.getBuffer(SM.getMainFileID(), &Invalid);
-  assert(!Invalid);
-  if (Invalid)
+  Optional<MemoryBufferRef> FromFile = SM.getBuffer(SM.getMainFileID());
+  if (!FromFile)
     return; // Should never happen, but whatever.
-  MainEOL = DetectEOL(FromFile);
+  MainEOL = DetectEOL(*FromFile);
 }
 
 /// Writes out bytes from \p FromFile, starting at \p NextToWrite and ending at
 /// \p WriteTo - 1.
-void InclusionRewriter::OutputContentUpTo(const MemoryBuffer &FromFile,
+void InclusionRewriter::OutputContentUpTo(MemoryBufferRef FromFile,
                                           unsigned &WriteFrom, unsigned WriteTo,
                                           StringRef LocalEOL, int &Line,
                                           bool EnsureNewline) {
   if (WriteTo <= WriteFrom)
     return;
-  if (&FromFile == PredefinesBuffer) {
+  if (FromFile == PredefinesBuffer) {
     // Ignore the #defines of the predefines buffer.
     WriteFrom = WriteTo;
     return;
@@ -341,7 +337,7 @@ void InclusionRewriter::OutputContentUpTo(const MemoryBuffer &FromFile,
 /// through the \p FromFile buffer.
 void InclusionRewriter::CommentOutDirective(Lexer &DirectiveLex,
                                             const Token &StartToken,
-                                            const MemoryBuffer &FromFile,
+                                            MemoryBufferRef FromFile,
                                             StringRef LocalEOL,
                                             unsigned &NextToWrite, int &Line) {
   OutputContentUpTo(FromFile, NextToWrite,
@@ -351,7 +347,7 @@ void InclusionRewriter::CommentOutDirective(Lexer &DirectiveLex,
   do {
     DirectiveLex.LexFromRawLexer(DirectiveToken);
   } while (!DirectiveToken.is(tok::eod) && DirectiveToken.isNot(tok::eof));
-  if (&FromFile == PredefinesBuffer) {
+  if (FromFile == PredefinesBuffer) {
     // OutputContentUpTo() would not output anything anyway.
     return;
   }
@@ -379,11 +375,11 @@ StringRef InclusionRewriter::NextIdentifierName(Lexer &RawLex,
 void InclusionRewriter::Process(FileID FileId,
                                 SrcMgr::CharacteristicKind FileType,
                                 const DirectoryLookup *DirLookup) {
-  bool Invalid;
-  const MemoryBuffer &FromFile = *SM.getBuffer(FileId, &Invalid);
-  assert(!Invalid && "Attempting to process invalid inclusion");
+  Optional<MemoryBufferRef> MaybeFromFile = SM.getBuffer(FileId);
+  assert(MaybeFromFile && "Attempting to process invalid inclusion");
+  auto FromFile = *MaybeFromFile;
   StringRef FileName = FromFile.getBufferIdentifier();
-  Lexer RawLex(FileId, &FromFile, PP.getSourceManager(), PP.getLangOpts());
+  Lexer RawLex(FileId, FromFile, PP.getSourceManager(), PP.getLangOpts());
   RawLex.SetCommentRetentionState(false);
 
   StringRef LocalEOL = DetectEOL(FromFile);

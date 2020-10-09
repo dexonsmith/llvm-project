@@ -245,7 +245,13 @@ const char *FullSourceLoc::getCharacterData(bool *Invalid) const {
 
 StringRef FullSourceLoc::getBufferData(bool *Invalid) const {
   assert(isValid());
-  return SrcMgr->getBuffer(SrcMgr->getFileID(*this), Invalid)->getBuffer();
+  auto Buffer = SrcMgr->getBuffer(SrcMgr->getFileID(*this));
+  if (Invalid)
+    *Invalid = !Buffer;
+
+  if (Buffer)
+    return Buffer->getBuffer();
+  return "";
 }
 
 std::pair<FileID, unsigned> FullSourceLoc::getDecomposedLoc() const {

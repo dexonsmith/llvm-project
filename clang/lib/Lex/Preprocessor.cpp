@@ -398,9 +398,9 @@ bool Preprocessor::SetCodeCompletionPoint(const FileEntry *File,
   using llvm::MemoryBuffer;
 
   // Load the actual file's contents.
-  bool Invalid = false;
-  const MemoryBuffer *Buffer = SourceMgr.getMemoryBufferForFile(File, &Invalid);
-  if (Invalid)
+  llvm::Optional<llvm::MemoryBufferRef> Buffer =
+      SourceMgr.getMemoryBufferForFile(File);
+  if (!Buffer)
     return true;
 
   // Find the byte position of the truncation point.

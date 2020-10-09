@@ -794,7 +794,7 @@ static bool areExprsFromDifferentMacros(const Expr *LhsExpr,
       SM.getDecomposedLoc(SM.getExpansionLoc(Lsr.getBegin()));
   std::pair<FileID, unsigned> RsrLocInfo =
       SM.getDecomposedLoc(SM.getExpansionLoc(Rsr.getBegin()));
-  const llvm::MemoryBuffer *MB = SM.getBuffer(LsrLocInfo.first);
+  llvm::Optional<llvm::MemoryBufferRef> MB = SM.getBuffer(LsrLocInfo.first);
 
   const char *LTokenPos = MB->getBufferStart() + LsrLocInfo.second;
   const char *RTokenPos = MB->getBufferStart() + RsrLocInfo.second;

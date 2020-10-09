@@ -73,10 +73,9 @@ bool Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
     MaxIncludeStackDepth = IncludeMacroStack.size();
 
   // Get the MemoryBuffer for this FID, if it fails, we fail.
-  bool Invalid = false;
-  const llvm::MemoryBuffer *InputFile =
-    getSourceManager().getBuffer(FID, Loc, &Invalid);
-  if (Invalid) {
+  llvm::Optional<llvm::MemoryBufferRef> InputFile =
+      getSourceManager().getBuffer(FID, Loc);
+  if (!InputFile) {
     SourceLocation FileStart = SourceMgr.getLocForStartOfFile(FID);
     Diag(Loc, diag::err_pp_error_opening_file)
         << std::string(SourceMgr.getBufferName(FileStart)) << "";
@@ -90,7 +89,7 @@ bool Preprocessor::EnterSourceFile(FileID FID, const DirectoryLookup *CurDir,
         CodeCompletionFileLoc.getLocWithOffset(CodeCompletionOffset);
   }
 
-  EnterSourceFileWithLexer(new Lexer(FID, InputFile, *this), CurDir);
+  EnterSourceFileWithLexer(new Lexer(FID, *InputFile, *this), CurDir);
   return false;
 }
 

@@ -374,9 +374,8 @@ CGDebugInfo::computeChecksum(FileID FID, SmallString<32> &Checksum) const {
     return None;
 
   SourceManager &SM = CGM.getContext().getSourceManager();
-  bool Invalid;
-  const llvm::MemoryBuffer *MemBuffer = SM.getBuffer(FID, &Invalid);
-  if (Invalid)
+  llvm::Optional<llvm::MemoryBufferRef> MemBuffer = SM.getBuffer(FID);
+  if (!MemBuffer)
     return None;
 
   llvm::MD5 Hash;
@@ -394,13 +393,7 @@ Optional<StringRef> CGDebugInfo::getSource(const SourceManager &SM,
   if (!CGM.getCodeGenOpts().EmbedSource)
     return None;
 
-  bool SourceInvalid = false;
-  StringRef Source = SM.getBufferData(FID, &SourceInvalid);
-
-  if (SourceInvalid)
-    return None;
-
-  return Source;
+  return SM.getBufferData(FID);
 }
 
 llvm::DIFile *CGDebugInfo::getOrCreateFile(SourceLocation Loc) {

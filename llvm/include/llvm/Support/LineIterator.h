@@ -9,6 +9,7 @@
 #ifndef LLVM_SUPPORT_LINEITERATOR_H
 #define LLVM_SUPPORT_LINEITERATOR_H
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DataTypes.h"
 #include <iterator>
@@ -16,6 +17,7 @@
 namespace llvm {
 
 class MemoryBuffer;
+class MemoryBufferRef;
 
 /// A forward iterator which reads text lines from a buffer.
 ///
@@ -30,16 +32,22 @@ class MemoryBuffer;
 /// Note that this iterator requires the buffer to be nul terminated.
 class line_iterator
     : public std::iterator<std::forward_iterator_tag, StringRef> {
-  const MemoryBuffer *Buffer = nullptr;
+  Optional<StringRef> Buffer;
   char CommentMarker = '\0';
   bool SkipBlanks = true;
 
   unsigned LineNumber = 1;
   StringRef CurrentLine;
 
+  explicit line_iterator(StringRef Buffer, bool SkipBlanks, char CommentMarker);
+
 public:
   /// Default construct an "end" iterator.
   line_iterator() = default;
+
+  /// Construct a new iterator around an unowned memory buffer.
+  explicit line_iterator(const MemoryBufferRef &Buffer, bool SkipBlanks = true,
+                         char CommentMarker = '\0');
 
   /// Construct a new iterator around some memory buffer.
   explicit line_iterator(const MemoryBuffer &Buffer, bool SkipBlanks = true,
@@ -70,8 +78,14 @@ public:
   const StringRef *operator->() const { return &CurrentLine; }
 
   friend bool operator==(const line_iterator &LHS, const line_iterator &RHS) {
-    return LHS.Buffer == RHS.Buffer &&
-           LHS.CurrentLine.begin() == RHS.CurrentLine.begin();
+    if (LHS.Buffer && RHS.Buffer) {
+      // Use pointer identity to compare Buffer.
+      if (LHS.Buffer->begin() != RHS.Buffer->begin())
+        return false;
+    } else if (LHS.Buffer || RHS.Buffer) {
+      return false;
+    }
+    return LHS.CurrentLine.begin() == RHS.CurrentLine.begin();
   }
 
   friend bool operator!=(const line_iterator &LHS, const line_iterator &RHS) {

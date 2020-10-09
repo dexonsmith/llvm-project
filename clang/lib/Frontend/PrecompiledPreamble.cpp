@@ -463,7 +463,8 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
           PrecompiledPreamble::PreambleFileHash::createForFile(File->getSize(),
                                                                ModTime);
     } else {
-      const llvm::MemoryBuffer *Buffer = SourceMgr.getMemoryBufferForFile(File);
+      llvm::Optional<llvm::MemoryBufferRef> Buffer =
+          SourceMgr.getMemoryBufferForFile(File);
       FilesInPreamble[File->getName()] =
           PrecompiledPreamble::PreambleFileHash::createForMemoryBuffer(Buffer);
     }
@@ -549,7 +550,9 @@ bool PrecompiledPreamble::CanReuse(const CompilerInvocation &Invocation,
   llvm::StringMap<PreambleFileHash> OverridenFileBuffers;
   for (const auto &RB : PreprocessorOpts.RemappedFileBuffers) {
     const PrecompiledPreamble::PreambleFileHash PreambleHash =
-        PreambleFileHash::createForMemoryBuffer(RB.second);
+        PreambleFileHash::createForMemoryBuffer(
+            RB.second ? RB.second->getMemBufferRef()
+                      : llvm::Optional<llvm::MemoryBufferRef>(None));
     llvm::vfs::Status Status;
     if (moveOnNoError(VFS->status(RB.first), Status))
       OverriddenFiles[Status.getUniqueID()] = PreambleHash;
@@ -783,13 +786,13 @@ PrecompiledPreamble::PreambleFileHash::createForFile(off_t Size,
 
 PrecompiledPreamble::PreambleFileHash
 PrecompiledPreamble::PreambleFileHash::createForMemoryBuffer(
-    const llvm::MemoryBuffer *Buffer) {
+    llvm::Optional<llvm::MemoryBufferRef> Buffer) {
   PreambleFileHash Result;
-  Result.Size = Buffer->getBufferSize();
+  Result.Size = Buffer ? Buffer->getBufferSize() : 0;
   Result.ModTime = 0;
 
   llvm::MD5 MD5Ctx;
-  MD5Ctx.update(Buffer->getBuffer().data());
+  MD5Ctx.update(Buffer ? Buffer->getBuffer().data() : nullptr);
   MD5Ctx.final(Result.MD5);
 
   return Result;

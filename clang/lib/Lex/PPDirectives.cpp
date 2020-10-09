@@ -379,7 +379,8 @@ Optional<unsigned> Preprocessor::getSkippedRangeForExcludedConditionalBlock(
 
   std::pair<FileID, unsigned> HashFileOffset =
       SourceMgr.getDecomposedLoc(HashLoc);
-  const llvm::MemoryBuffer *Buf = SourceMgr.getBuffer(HashFileOffset.first);
+  llvm::Optional<llvm::MemoryBufferRef> Buf =
+      SourceMgr.getBuffer(HashFileOffset.first);
   if (!Buf)
     return None;
   auto It =

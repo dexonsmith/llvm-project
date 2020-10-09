@@ -141,10 +141,10 @@ SourceLocation trans::findSemiAfterLocation(SourceLocation loc,
   std::pair<FileID, unsigned> locInfo = SM.getDecomposedLoc(loc);
 
   // Try to load the file buffer.
-  bool invalidTemp = false;
-  StringRef file = SM.getBufferData(locInfo.first, &invalidTemp);
-  if (invalidTemp)
+  llvm::Optional<StringRef> maybeFile = SM.getBufferData(locInfo.first);
+  if (!maybeFile)
     return SourceLocation();
+  StringRef file = *maybeFile;
 
   const char *tokenBegin = file.data() + locInfo.second;
 
@@ -389,10 +389,10 @@ bool MigrationContext::rewritePropertyAttribute(StringRef fromAttr,
   std::pair<FileID, unsigned> locInfo = SM.getDecomposedLoc(atLoc);
 
   // Try to load the file buffer.
-  bool invalidTemp = false;
-  StringRef file = SM.getBufferData(locInfo.first, &invalidTemp);
-  if (invalidTemp)
+  llvm::Optional<StringRef> maybeFile = SM.getBufferData(locInfo.first);
+  if (!maybeFile)
     return false;
+  StringRef file = *maybeFile;
 
   const char *tokenBegin = file.data() + locInfo.second;
 
@@ -470,10 +470,10 @@ bool MigrationContext::addPropertyAttribute(StringRef attr,
   std::pair<FileID, unsigned> locInfo = SM.getDecomposedLoc(atLoc);
 
   // Try to load the file buffer.
-  bool invalidTemp = false;
-  StringRef file = SM.getBufferData(locInfo.first, &invalidTemp);
-  if (invalidTemp)
+  llvm::Optional<StringRef> maybeFile = SM.getBufferData(locInfo.first);
+  if (!maybeFile)
     return false;
+  StringRef file = *maybeFile;
 
   const char *tokenBegin = file.data() + locInfo.second;
 

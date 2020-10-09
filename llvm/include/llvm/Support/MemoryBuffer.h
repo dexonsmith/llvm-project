@@ -278,6 +278,15 @@ public:
   const char *getBufferStart() const { return Buffer.begin(); }
   const char *getBufferEnd() const { return Buffer.end(); }
   size_t getBufferSize() const { return Buffer.size(); }
+
+  /// Check if two memory buffer refs have the same pointer identity.
+  friend bool operator==(const MemoryBufferRef &LHS,
+                         const MemoryBufferRef &RHS) {
+    return LHS.Buffer.begin() == RHS.Buffer.begin() &&
+           LHS.Buffer.end() == RHS.Buffer.end() &&
+           LHS.Identifier.begin() == RHS.Identifier.begin() &&
+           LHS.Identifier.end() == RHS.Identifier.end();
+  }
 };
 
 // Create wrappers for C Binding types (see CBindingWrapping.h).
