@@ -336,8 +336,12 @@ static void InitializeFileRemapping(DiagnosticsEngine &Diags,
 
     // Override the contents of the "from" file with the contents of
     // the "to" file.
-    SourceMgr.overrideFileContents(FromFile, RB.second,
-                                   InitOpts.RetainRemappedFileBuffers);
+    if (InitOpts.RetainRemappedFileBuffers)
+      SourceMgr.overrideFileContents(FromFile, *RB.second);
+    else
+      SourceMgr.overrideFileContents(
+          FromFile, std::unique_ptr<llvm::MemoryBuffer>(
+                        const_cast<llvm::MemoryBuffer *>(RB.second)));
   }
 
   // Remap files in the source manager (with other files).

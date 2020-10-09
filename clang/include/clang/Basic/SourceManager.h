@@ -92,17 +92,8 @@ namespace SrcMgr {
   ///
   /// This object owns the MemoryBuffer object.
   class alignas(8) ContentCache {
-    enum CCFlags {
-      /// Whether the buffer should not be freed on destruction.
-      DoNotFreeFlag = 0x02
-    };
-
-    /// The actual buffer containing the characters from the input
-    /// file.
-    ///
-    /// This is owned by the ContentCache object.  The bits indicate
-    /// whether the buffer is invalid.
-    mutable llvm::PointerIntPair<const llvm::MemoryBuffer *, 2> Buffer;
+    /// The actual buffer containing the characters from the input file.
+    mutable std::unique_ptr<llvm::MemoryBuffer> Buffer;
 
   public:
     /// Reference to the file entry representing this ContentCache.
@@ -152,25 +143,21 @@ namespace SrcMgr {
     ContentCache(const FileEntry *Ent = nullptr) : ContentCache(Ent, Ent) {}
 
     ContentCache(const FileEntry *Ent, const FileEntry *contentEnt)
-        : Buffer(nullptr, false), OrigEntry(Ent), ContentsEntry(contentEnt),
-          BufferOverridden(false), IsFileVolatile(false), IsTransient(false),
-          IsBufferInvalid(false) {}
+        : OrigEntry(Ent), ContentsEntry(contentEnt), BufferOverridden(false),
+          IsFileVolatile(false), IsTransient(false), IsBufferInvalid(false) {}
 
     /// The copy ctor does not allow copies where source object has either
     /// a non-NULL Buffer or SourceLineCache.  Ownership of allocated memory
     /// is not transferred, so this is a logical error.
     ContentCache(const ContentCache &RHS)
         : ContentCache(RHS.OrigEntry, RHS.ContentsEntry) {
-      assert(RHS.Buffer.getPointer() == nullptr &&
-             RHS.SourceLineCache == nullptr &&
+      assert(!RHS.Buffer && RHS.SourceLineCache == nullptr &&
              "Passed ContentCache object cannot own a buffer.");
 
       NumLines = RHS.NumLines;
     }
 
     ContentCache &operator=(const ContentCache& RHS) = delete;
-
-    ~ContentCache();
 
     /// Returns the memory buffer for the associated content.
     ///
@@ -222,20 +209,19 @@ namespace SrcMgr {
 
     /// Get the underlying buffer, returning NULL if the buffer is not
     /// yet available.
-    const llvm::MemoryBuffer *getRawBuffer() const {
-      return Buffer.getPointer();
+    const llvm::MemoryBuffer *getRawBuffer() const { return Buffer.get(); }
+
+    /// Set the buffer.
+    void setBuffer(std::unique_ptr<llvm::MemoryBuffer> B) {
+      IsBufferInvalid = false;
+      Buffer = std::move(B);
     }
 
-    /// Replace the existing buffer (which will be deleted)
-    /// with the given buffer.
-    void replaceBuffer(const llvm::MemoryBuffer *B, bool DoNotFree = false);
-
-    /// Determine whether the buffer itself is invalid.
-    bool isBufferInvalid() const { return IsBufferInvalid; }
-
-    /// Determine whether the buffer should be freed.
-    bool shouldFreeBuffer() const {
-      return (Buffer.getInt() & DoNotFreeFlag) == 0;
+    /// Set the buffer to one that's not owned; or, possibly, to nullptr.
+    void setUnownedBuffer(const llvm::MemoryBuffer *B) {
+      assert(!Buffer && "Expected to be called right after construction");
+      if (B)
+        setBuffer(llvm::MemoryBuffer::getMemBuffer(B->getMemBufferRef()));
     }
   };
 
@@ -869,9 +855,8 @@ public:
                       int LoadedID = 0, unsigned LoadedOffset = 0,
                       SourceLocation IncludeLoc = SourceLocation()) {
     StringRef Name = Buffer->getBufferIdentifier();
-    return createFileID(
-        createMemBufferContentCache(Buffer.release(), /*DoNotFree*/ false),
-        Name, IncludeLoc, FileCharacter, LoadedID, LoadedOffset);
+    return createFileID(createMemBufferContentCache(std::move(Buffer)), Name,
+                        IncludeLoc, FileCharacter, LoadedID, LoadedOffset);
   }
 
   /// Create a new FileID that represents the specified memory buffer.
@@ -934,14 +919,14 @@ public:
   ///
   /// \param Buffer the memory buffer whose contents will be used as the
   /// data in the given source file.
-  ///
-  /// \param DoNotFree If true, then the buffer will not be freed when the
-  /// source manager is destroyed.
   void overrideFileContents(const FileEntry *SourceFile,
-                            llvm::MemoryBuffer *Buffer, bool DoNotFree);
+                            std::unique_ptr<llvm::MemoryBuffer> Buffer);
+
+  /// Override a buffer without taking ownership.
   void overrideFileContents(const FileEntry *SourceFile,
-                            std::unique_ptr<llvm::MemoryBuffer> Buffer) {
-    overrideFileContents(SourceFile, Buffer.release(), /*DoNotFree*/ false);
+                            const llvm::MemoryBuffer &Buffer) {
+    overrideFileContents(
+        SourceFile, llvm::MemoryBuffer::getMemBuffer(Buffer.getMemBufferRef()));
   }
 
   /// Override the given source file with another one.
@@ -1862,7 +1847,7 @@ private:
 
   /// Create a new ContentCache for the specified  memory buffer.
   const SrcMgr::ContentCache *
-  createMemBufferContentCache(const llvm::MemoryBuffer *Buf, bool DoNotFree);
+  createMemBufferContentCache(std::unique_ptr<llvm::MemoryBuffer> Buf);
 
   FileID getFileIDSlow(unsigned SLocOffset) const;
   FileID getFileIDLocal(unsigned SLocOffset) const;
