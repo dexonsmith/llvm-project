@@ -397,7 +397,7 @@ bool Preprocessor::SetCodeCompletionPoint(const FileEntry *File,
 
   // Load the actual file's contents.
   llvm::Optional<llvm::MemoryBufferRef> Buffer =
-      SourceMgr.getMemoryBufferForFile(File);
+      SourceMgr.getMemoryBufferForFileOrNone(File);
   if (!Buffer)
     return true;
 

@@ -903,9 +903,15 @@ public:
                                      SourceLocation TokenStart,
                                      SourceLocation TokenEnd);
 
+  /// Retrieve the memory buffer associated with the given file.
+  ///
+  /// \param Invalid If non-NULL, will be set \c true if an error
+  /// occurs while retrieving the memory buffer.
+  llvm::MemoryBufferRef getMemoryBufferForFile(const FileEntry *File);
+
   /// Retrieve the memory buffer associated with the given file, if any.
   llvm::Optional<llvm::MemoryBufferRef>
-  getMemoryBufferForFile(const FileEntry *File);
+  getMemoryBufferForFileOrNone(const FileEntry *File);
 
   /// Override the contents of the given source file by providing an
   /// already-allocated buffer.

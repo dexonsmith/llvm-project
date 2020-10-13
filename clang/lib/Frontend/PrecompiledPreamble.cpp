@@ -463,11 +463,9 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
           PrecompiledPreamble::PreambleFileHash::createForFile(File->getSize(),
                                                                ModTime);
     } else {
-      llvm::Optional<llvm::MemoryBufferRef> Buffer =
-          SourceMgr.getMemoryBufferForFile(File);
-      assert(Buffer && "Expected valid file");
+      llvm::MemoryBufferRef Buffer = SourceMgr.getMemoryBufferForFile(File);
       FilesInPreamble[File->getName()] =
-          PrecompiledPreamble::PreambleFileHash::createForMemoryBuffer(*Buffer);
+          PrecompiledPreamble::PreambleFileHash::createForMemoryBuffer(Buffer);
     }
   }
 
