@@ -723,11 +723,11 @@ SourceManager::createExpansionLocImpl(const ExpansionInfo &Info,
   return SourceLocation::getMacroLoc(NextLocalOffset - (TokLength + 1));
 }
 
-const llvm::MemoryBuffer *
-SourceManager::getMemoryBufferForFile(const FileEntry *File, bool *Invalid) {
+llvm::Optional<llvm::MemoryBufferRef>
+SourceManager::getMemoryBufferForFile(const FileEntry *File) {
   const SrcMgr::ContentCache *IR = getOrCreateContentCache(File);
   assert(IR && "getOrCreateContentCache() cannot return NULL");
-  return IR->getBuffer(Diag, getFileManager(), SourceLocation(), Invalid);
+  return IR->getBufferOrNone(Diag, getFileManager(), SourceLocation());
 }
 
 void SourceManager::overrideFileContents(const FileEntry *SourceFile,

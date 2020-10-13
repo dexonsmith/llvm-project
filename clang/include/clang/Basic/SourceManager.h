@@ -191,6 +191,16 @@ namespace SrcMgr {
                                         SourceLocation Loc = SourceLocation(),
                                         bool *Invalid = nullptr) const;
 
+    llvm::Optional<llvm::MemoryBufferRef>
+    getBufferOrNone(DiagnosticsEngine &Diag, FileManager &FM,
+                    SourceLocation Loc = SourceLocation()) const {
+      bool Invalid = false;
+      const llvm::MemoryBuffer *Buffer = getBuffer(Diag, FM, Loc, &Invalid);
+      if (Invalid)
+        return None;
+      return Buffer->getMemBufferRef();
+    }
+
     /// Returns the size of the content encapsulated by this
     /// ContentCache.
     ///
@@ -893,12 +903,9 @@ public:
                                      SourceLocation TokenStart,
                                      SourceLocation TokenEnd);
 
-  /// Retrieve the memory buffer associated with the given file.
-  ///
-  /// \param Invalid If non-NULL, will be set \c true if an error
-  /// occurs while retrieving the memory buffer.
-  const llvm::MemoryBuffer *getMemoryBufferForFile(const FileEntry *File,
-                                                   bool *Invalid = nullptr);
+  /// Retrieve the memory buffer associated with the given file, if any.
+  llvm::Optional<llvm::MemoryBufferRef>
+  getMemoryBufferForFile(const FileEntry *File);
 
   /// Override the contents of the given source file by providing an
   /// already-allocated buffer.
