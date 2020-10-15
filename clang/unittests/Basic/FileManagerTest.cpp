@@ -485,29 +485,34 @@ TEST_F(FileManagerTest, getBypassFile) {
   // Set up a virtual file with a different size than FakeStatCache uses.
   const FileEntry *File = Manager.getVirtualFile("/tmp/test", /*Size=*/10, 0);
   ASSERT_TRUE(File);
-  FileEntryRef Ref("/tmp/test", *File);
-  EXPECT_TRUE(Ref.isValid());
-  EXPECT_EQ(Ref.getSize(), 10);
+  const FileEntry &FE = *File;
+  EXPECT_TRUE(FE.isValid());
+  EXPECT_EQ(FE.getSize(), 10);
 
   // Calling a second time should not affect the UID or size.
-  unsigned VirtualUID = Ref.getUID();
-  EXPECT_EQ(*expectedToOptional(Manager.getFileRef("/tmp/test")), Ref);
-  EXPECT_EQ(Ref.getUID(), VirtualUID);
-  EXPECT_EQ(Ref.getSize(), 10);
+  unsigned VirtualUID = FE.getUID();
+  EXPECT_EQ(
+      &FE,
+      &expectedToOptional(Manager.getFileRef("/tmp/test"))->getFileEntry());
+  EXPECT_EQ(FE.getUID(), VirtualUID);
+  EXPECT_EQ(FE.getSize(), 10);
 
   // Bypass the file.
-  llvm::Optional<FileEntryRef> BypassRef = Manager.getBypassFile(Ref);
+  llvm::Optional<FileEntryRef> BypassRef =
+      Manager.getBypassFile(File->getLastRef());
   ASSERT_TRUE(BypassRef);
   EXPECT_TRUE(BypassRef->isValid());
-  EXPECT_EQ(BypassRef->getName(), Ref.getName());
+  EXPECT_EQ("/tmp/test", BypassRef->getName());
 
   // Check that it's different in the right ways.
   EXPECT_NE(&BypassRef->getFileEntry(), File);
   EXPECT_NE(BypassRef->getUID(), VirtualUID);
-  EXPECT_NE(BypassRef->getSize(), Ref.getSize());
+  EXPECT_NE(BypassRef->getSize(), FE.getSize());
 
   // The virtual file should still be returned when searching.
-  EXPECT_EQ(*expectedToOptional(Manager.getFileRef("/tmp/test")), Ref);
+  EXPECT_EQ(
+      &FE,
+      &expectedToOptional(Manager.getFileRef("/tmp/test"))->getFileEntry());
 }
 
 } // anonymous namespace
