@@ -431,52 +431,136 @@ public:
   }
 };
 
+struct ExpansionTag {};
+struct FileTag {};
+
+struct SLocEntryHeader {
+  SLocEntryHeader() : Offset(), IsExpansion(), IndexPlus1(), IsBroken() {}
+
+  SLocEntryHeader(unsigned Offset, FileTag, unsigned Index)
+      : Offset(Offset), IsFile(true), IndexPlus1(Index + 1u) {
+    assert(!(Offset & (1u << 31)) && "Offset is too large");
+    assert(!(Index & (1u << 31)) && "Index is too large");
+    assert(isLoaded());
+  }
+
+  SLocEntryHeader(unsigned Offset, ExpansionTag, unsigned Index)
+      : Offset(Offset), IsExpansion(true), IndexPlus1(Index + 1u) {
+    assert(!(Offset & (1u << 31)) && "Offset is too large");
+    assert(!(Index & (1u << 31)) && "Offset is too large");
+    assert(isLoaded());
+  }
+
+  bool isLoaded() const { return IndexPlus1; }
+  unsigned getIndex() const { return IndexPlus1 - 1u; }
+  unsigned getOffset() const { return Offset; }
+  bool isExpansion() const { return IsExpansion; }
+
+private:
+  unsigned Offset : 31;
+  unsigned IsExpansion : 1;
+  unsigned IndexPlus1 : 31; // Counts from 1 to allow zerofill.
+  unsigned IsBroken : 1; // Counts from 1 to allow zerofill.
+};
+
 /// This is a discriminated union of FileInfo and ExpansionInfo.
 ///
 /// SourceManager keeps an array of these objects, and they are uniquely
 /// identified by the FileID datatype.
-class SLocEntry {
-  unsigned Offset : 31;
-  unsigned IsExpansion : 1;
-  union {
-    FileInfo File;
-    ExpansionInfo Expansion;
-  };
+class SLocEntryRef {
+  SLocEntryHeader *Header;
+  PointerUnion<SFileInfo *, ExpansionInfo *> Info;
 
 public:
-  SLocEntry() : Offset(), IsExpansion(), File() {}
+  SLocEntryRef() = delete;
 
-  unsigned getOffset() const { return Offset; }
+  SLocEntryRef(SLocEntryHeader &Header) : Header(&Header) {
+    assert(!isLoaded());
+  }
 
-  bool isExpansion() const { return IsExpansion; }
+  SLocEntryRef(SLocEntryHeader &Header, FileInfo &Info)
+      : Header(&Header), Info(&Info) {
+    assert(isLoaded());
+    assert(isFile());
+  }
+
+  SLocEntryRef(SLocEntryHeader &Header, ExpansionInfo &Info)
+      : Header(&Header), Info(&Info) {
+    assert(isLoaded());
+    assert(isExpansion());
+  }
+
+  unsigned getOffset() const { return Header->getOffset(); }
+
+  bool isExpansion() const { return Header->isExpansion(); }
   bool isFile() const { return !isExpansion(); }
 
+  bool isLoaded() const { return Header->isLoaded(); }
+
   const FileInfo &getFile() const {
+    assert(isLoaded());
     assert(isFile() && "Not a file SLocEntry!");
-    return File;
+    return Info.get<FileInfo *>();
   }
 
   const ExpansionInfo &getExpansion() const {
+    assert(isLoaded());
     assert(isExpansion() && "Not a macro expansion SLocEntry!");
-    return Expansion;
+    return Info.get<ExpansionInfo *>();
+  }
+};
+
+class SLocEntryTable {
+  SmallVector<SLocEntryHeader, 0> Headers;
+  SmallVector<FileInfo, 0> Files;
+  SmallVector<ExpansionInfo, 0> Expansions;
+
+  unsigned size() const { return Headers.size(); }
+
+  bool isLoaded(unsigned I) const {
+    assert(I < Headers.size());
+    return Headers[I].isLoaded();
   }
 
-  static SLocEntry get(unsigned Offset, const FileInfo &FI) {
-    assert(!(Offset & (1u << 31)) && "Offset is too large");
-    SLocEntry E;
-    E.Offset = Offset;
-    E.IsExpansion = false;
-    E.File = FI;
-    return E;
+  SLocEntryRef get(unsigned I) const {
+    assert(I < Headers.size());
+    auto &H = Headers[I];
+    assert(H.isLoaded() && "Expected a loaded entry");
+
+    auto Index = H.getIndex();
+    assert(Index < (H.IsExpansion ? Expansions.size() : Files.size()));
+    return H.IsExpansion ? SLocEntryRef(H, Expansions[Index])
+                         : SLocEntryRef(H, Files[Index]);
   }
 
-  static SLocEntry get(unsigned Offset, const ExpansionInfo &Expansion) {
-    assert(!(Offset & (1u << 31)) && "Offset is too large");
-    SLocEntry E;
-    E.Offset = Offset;
-    E.IsExpansion = true;
-    E.Expansion = Expansion;
-    return E;
+  void set(unsigned I, unsigned Offset, FileInfo FI) {
+    assert(I < Headers.size());
+    auto &H = Headers[I];
+    assert(!H.isLoaded());
+    H = SLocEntryHeader(Offset, FileTag(), Files.size());
+    Files.push_back(FI);
+  }
+
+  void set(unsigned I, unsigned Offset, ExpansionInfo EI) {
+    assert(I < Headers.size());
+    auto &H = Headers[I];
+    assert(!H.isLoaded());
+    H = SLocEntryHeader(Offset, ExpansionTag(), Expansions.size());
+    Expansions.push_back(EI);
+  }
+
+  void addFile(unsigned Offset, FileInfo FI) {
+    Headers.emplace_back();
+    set(Headers.size() - 1, Offset, FI);
+  }
+
+  void addExpansion(unsigned Offset, ExpansionInfo EI) {
+    Headers.emplace_back();
+    set(Headers.size() - 1, Offset, EI);
+  }
+
+  void allocatedUnloadedEntries(unsigned N) {
+    Headers.resize(Headers.size() + N);
   }
 };
 
@@ -650,13 +734,13 @@ class SourceManager : public RefCountedBase<SourceManager> {
   ///
   /// Positive FileIDs are indexes into this table. Entry 0 indicates an invalid
   /// expansion.
-  SmallVector<SrcMgr::SLocEntry, 0> LocalSLocEntryTable;
+  SLocEntryTable LocalSLocEntryTable;
 
   /// The table of SLocEntries that are loaded from other modules.
   ///
   /// Negative FileIDs are indexes into this table. To get from ID to an index,
   /// use (-ID - 2).
-  mutable SmallVector<SrcMgr::SLocEntry, 0> LoadedSLocEntryTable;
+  mutable SLocEntryTable LoadedSLocEntryTable;
 
   /// The starting offset of the next local SLocEntry.
   ///
@@ -1002,7 +1086,7 @@ public:
   Optional<StringRef> getNonBuiltinFilenameForID(FileID FID) const;
 
   /// Returns the FileEntry record for the provided SLocEntry.
-  const FileEntry *getFileEntryForSLocEntry(const SrcMgr::SLocEntry &sloc) const
+  const FileEntry *getFileEntryForSLocEntry(const SrcMgr::SLocEntryRef &sloc) const
   {
     return sloc.getFile().getContentCache().OrigEntry;
   }
@@ -1627,8 +1711,8 @@ public:
   /// Get the number of local SLocEntries we have.
   unsigned local_sloc_entry_size() const { return LocalSLocEntryTable.size(); }
 
-  /// Get a local SLocEntry. This is exposed for indexing.
-  const SrcMgr::SLocEntry &getLocalSLocEntry(unsigned Index) const {
+  /// Get a local SLocEntryRef. This is exposed for indexing.
+  SrcMgr::SLocEntryRef getLocalSLocEntry(unsigned Index) const {
     assert(Index < LocalSLocEntryTable.size() && "Invalid index");
     return LocalSLocEntryTable[Index];
   }
@@ -1636,22 +1720,18 @@ public:
   /// Get the number of loaded SLocEntries we have.
   unsigned loaded_sloc_entry_size() const { return LoadedSLocEntryTable.size();}
 
-  /// Get a loaded SLocEntry. This is exposed for indexing.
-  const SrcMgr::SLocEntry &getLoadedSLocEntry(unsigned Index,
-                                              bool *Invalid = nullptr) const {
-    assert(Index < LoadedSLocEntryTable.size() && "Invalid index");
-    if (SLocEntryLoaded[Index])
-      return LoadedSLocEntryTable[Index];
-    return loadSLocEntry(Index, Invalid);
+  /// Get a loaded SLocEntryRef. This is exposed for indexing.
+  llvm::Optional<SrcMgr::SLocEntryRef>
+  getLoadedSLocEntry(unsigned Index) const {
+    if (LoadedSLocEntryTable.isLoaded(Index))
+      return LoadedSLocEntryTable.get(Index);
+    return loadSLocEntry(Index);
   }
 
-  const SrcMgr::SLocEntry &getSLocEntry(FileID FID,
-                                        bool *Invalid = nullptr) const {
-    if (FID.ID == 0 || FID.ID == -1) {
-      if (Invalid) *Invalid = true;
-      return LocalSLocEntryTable[0];
-    }
-    return getSLocEntryByID(FID.ID, Invalid);
+  llvm::Optional<SrcMgr::SLocEntryRef> getSLocEntry(FileID FID) const {
+    if (FID.ID == 0 || FID.ID == -1)
+      return None;
+    return getSLocEntryByID(FID.ID);
   }
 
   unsigned getNextLocalOffset() const { return NextLocalOffset; }
@@ -1718,34 +1798,26 @@ private:
   llvm::MemoryBuffer *getFakeBufferForRecovery() const;
   const SrcMgr::ContentCache *getFakeContentCacheForRecovery() const;
 
-  const SrcMgr::SLocEntry &loadSLocEntry(unsigned Index, bool *Invalid) const;
+  llvm::Optional<SrcMgr::SLocEntryRef> loadSLocEntry(unsigned Index) const;
 
-  const SrcMgr::SLocEntry *getSLocEntryOrNull(FileID FID) const {
-    bool Invalid = false;
-    const SrcMgr::SLocEntry &Entry = getSLocEntry(FID, &Invalid);
-    return Invalid ? nullptr : &Entry;
-  }
-
-  const SrcMgr::SLocEntry *getSLocEntryForFile(FileID FID) const {
-    if (auto *Entry = getSLocEntryOrNull(FID))
+  llvm::Optional<SrcMgr::SLocEntryRef> getSLocEntryForFile(FileID FID) const {
+    if (auto Entry = getSLocEntry(FID))
       if (Entry->isFile())
         return Entry;
-    return nullptr;
+    return None;
   }
 
   /// Get the entry with the given unwrapped FileID.
   /// Invalid will not be modified for Local IDs.
-  const SrcMgr::SLocEntry &getSLocEntryByID(int ID,
-                                            bool *Invalid = nullptr) const {
+  llvm::Optional<SrcMgr::SLocEntryRef> getSLocEntryByID(int ID) const {
     assert(ID != -1 && "Using FileID sentinel value");
     if (ID < 0)
       return getLoadedSLocEntryByID(ID, Invalid);
     return getLocalSLocEntry(static_cast<unsigned>(ID));
   }
 
-  const SrcMgr::SLocEntry &
-  getLoadedSLocEntryByID(int ID, bool *Invalid = nullptr) const {
-    return getLoadedSLocEntry(static_cast<unsigned>(-ID - 2), Invalid);
+  llvm::Optional<SrcMgr::SLocEntryRef> getLoadedSLocEntryByID(int ID) const {
+    return getLoadedSLocEntry(static_cast<unsigned>(-ID - 2));
   }
 
   /// Implements the common elements of storing an expansion info struct into
@@ -1758,7 +1830,7 @@ private:
   /// Return true if the specified FileID contains the
   /// specified SourceLocation offset.  This is a very hot method.
   inline bool isOffsetInFileID(FileID FID, unsigned SLocOffset) const {
-    const SrcMgr::SLocEntry &Entry = getSLocEntry(FID);
+    SrcMgr::SLocEntryRef Entry = getSLocEntry(FID);
     // If the entry is after the offset, it can't contain it.
     if (SLocOffset < Entry.getOffset()) return false;
 
@@ -1810,10 +1882,9 @@ private:
   SourceLocation getFileLocSlowCase(SourceLocation Loc) const;
 
   std::pair<FileID, unsigned>
-  getDecomposedExpansionLocSlowCase(const SrcMgr::SLocEntry *E) const;
+      getDecomposedExpansionLocSlowCase(SrcMgr::SLocEntryRef) const;
   std::pair<FileID, unsigned>
-  getDecomposedSpellingLocSlowCase(const SrcMgr::SLocEntry *E,
-                                   unsigned Offset) const;
+  getDecomposedSpellingLocSlowCase(SrcMgr::SLocEntryRef, unsigned Offset) const;
   void computeMacroArgsCache(MacroArgsMap &MacroArgsCache, FileID FID) const;
   void associateFileChunkWithMacroArgExp(MacroArgsMap &MacroArgsCache,
                                          FileID FID,

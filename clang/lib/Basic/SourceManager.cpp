@@ -267,12 +267,11 @@ void SourceManager::AddLineNote(SourceLocation Loc, unsigned LineNo,
                                 SrcMgr::CharacteristicKind FileKind) {
   std::pair<FileID, unsigned> LocInfo = getDecomposedExpansionLoc(Loc);
 
-  bool Invalid = false;
-  const SLocEntry &Entry = getSLocEntry(LocInfo.first, &Invalid);
-  if (!Entry.isFile() || Invalid)
+  auto Entry = getSLocEntryForFile(LocInfo.first);
+  if (!Entry)
     return;
 
-  const SrcMgr::FileInfo &FileInfo = Entry.getFile();
+  const SrcMgr::FileInfo &FileInfo = Entry->getFile();
 
   // Remember that this file has #line directives now if it doesn't already.
   const_cast<SrcMgr::FileInfo&>(FileInfo).setHasLineDirectives();
@@ -425,14 +424,14 @@ const ContentCache *SourceManager::createMemBufferContentCache(
   return Entry;
 }
 
-const SrcMgr::SLocEntry &SourceManager::loadSLocEntry(unsigned Index,
-                                                      bool *Invalid) const {
+llvm::Optional<SrcMgr::SLocEntryRef>
+SourceManager::loadSLocEntry(unsigned Index) const {
   assert(!SLocEntryLoaded[Index]);
   if (ExternalSLocEntries->ReadSLocEntry(-(static_cast<int>(Index) + 2))) {
     if (Invalid)
       *Invalid = true;
     // If the file of the SLocEntry changed we could still have loaded it.
-    if (!SLocEntryLoaded[Index]) {
+    if (!SLocEntryTable.isLoaded(Index)) {
       // Try to recover; create a SLocEntry so the rest of clang can handle it.
       LoadedSLocEntryTable[Index] = SLocEntry::get(
           0, FileInfo::get(SourceLocation(), *getFakeContentCacheForRecovery(),
@@ -440,7 +439,7 @@ const SrcMgr::SLocEntry &SourceManager::loadSLocEntry(unsigned Index,
     }
   }
 
-  return LoadedSLocEntryTable[Index];
+  return LoadedSLocEntryTable.get(Index);
 }
 
 std::pair<int, unsigned>
