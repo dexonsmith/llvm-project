@@ -514,6 +514,38 @@ TEST_F(SourceManagerTest, isMainFile) {
   EXPECT_FALSE(SourceMgr.isMainFile(*SecondFile));
 }
 
+TEST_F(SourceManagerTest, LoadedSLocEntryIndex) {
+  using SrcMgr::LoadedSLocEntryIndex;
+
+  // Check operator bool.
+  EXPECT_FALSE(LoadedSLocEntryIndex());
+  EXPECT_TRUE(LoadedSLocEntryIndex(0U));
+  EXPECT_TRUE(LoadedSLocEntryIndex(1U));
+  EXPECT_TRUE(LoadedSLocEntryIndex(-2U));
+#if !defined(NDEBUG) && GTEST_HAS_DEATH_TEST
+  EXPECT_DEATH(LoadedSLocEntryIndex(-1U), "Index too big");
+#endif
+  EXPECT_FALSE(LoadedSLocEntryIndex(None));
+
+  // Check operator*.
+#if !defined(NDEBUG) && GTEST_HAS_DEATH_TEST
+  EXPECT_DEATH(*LoadedSLocEntryIndex(), "Dereferencing None?");
+#endif
+  EXPECT_EQ(0U, *LoadedSLocEntryIndex(0U));
+  EXPECT_EQ(1U, *LoadedSLocEntryIndex(1U));
+  EXPECT_EQ(-2U, *LoadedSLocEntryIndex(-2U));
+
+  // Check operator=.
+  LoadedSLocEntryIndex I;
+  EXPECT_EQ(0U, *(I = 0U));
+  EXPECT_EQ(1U, *(I = 1U));
+  EXPECT_EQ(-2U, *(I = -2U));
+#if !defined(NDEBUG) && GTEST_HAS_DEATH_TEST
+  EXPECT_DEATH((I = -1U), "Index too big");
+#endif
+  EXPECT_FALSE((I = None));
+}
+
 #endif
 
 } // anonymous namespace

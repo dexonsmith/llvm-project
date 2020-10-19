@@ -69,6 +69,33 @@ class SourceManager;
 /// SourceManager implementation.
 namespace SrcMgr {
 
+  /// Optional index for loadable SLoc entries. Semantics of Optional<unsigned>
+  /// but without storage overhead.
+  class LoadedSLocEntryIndex {
+  public:
+    explicit operator bool() const { return Data; }
+    unsigned operator*() const {
+      assert(*this && "Dereferencing None?");
+      return Data - 1;
+    }
+
+    LoadedSLocEntryIndex &operator=(llvm::NoneType) {
+      return *this = LoadedSLocEntryIndex(None);
+    }
+    LoadedSLocEntryIndex &operator=(unsigned I) {
+      return *this = LoadedSLocEntryIndex(I);
+    }
+    LoadedSLocEntryIndex(llvm::NoneType = None) : Data(0) {}
+    LoadedSLocEntryIndex(unsigned I) : Data(I + 1) {
+      assert(*this && "Index too big");
+    }
+
+  private:
+    /// Index stored off-by-one with 0 as a sentinel to enable
+    /// zero-initialization.
+    unsigned Data;
+  };
+
   /// Indicates whether a file or directory holds normal user code,
   /// system code, or system code which is implicitly 'extern "C"' in C++ mode.
   ///
@@ -677,8 +704,8 @@ class SourceManager : public RefCountedBase<SourceManager> {
 
   /// The table of SLocEntries that are loaded from other modules.
   ///
-  /// Negative FileIDs are indexes into this table. To get from ID to an index,
-  /// use (-ID - 2).
+  /// Negative FileIDs are indexes into LoadedSLocEntryIndices, which contains the
+  /// index into this table.
   SmallVector<SrcMgr::SLocEntry, 0> LoadedSLocEntryTable;
 
   /// The starting offset of the next local SLocEntry.
@@ -688,19 +715,21 @@ class SourceManager : public RefCountedBase<SourceManager> {
 
   /// The starting offset of the latest batch of loaded SLocEntries.
   ///
-  /// This is LoadedSLocEntryTable.back().Offset, except that that entry might
-  /// not have been loaded, so that value would be unknown.
+  /// This is LoadedSLocEntryTable[LoadedSLocEntryIndices.back()].Offset,
+  /// except that that entry might not have been loaded, so that value would be
+  /// unknown.
   unsigned CurrentLoadedOffset;
 
   /// The highest possible offset is 2^31-1, so CurrentLoadedOffset
   /// starts at 2^31.
   static const unsigned MaxLoadedOffset = 1U << 31U;
 
-  /// A bitmap that indicates whether the entries of LoadedSLocEntryTable
-  /// have already been loaded from the external source.
+  /// An optional index into LoadedSLocEntryTable, where None indicates that an
+  /// SLocEntry has not yet been allocated.
   ///
-  /// Same indexing as LoadedSLocEntryTable.
-  llvm::BitVector SLocEntryLoaded;
+  /// Negative FileIDs are indexes into this table. To get from ID to an index,
+  /// use (-ID - 2).
+  SmallVector<SrcMgr::LoadedSLocEntryIndex, 0> LoadedSLocEntryIndices;
 
   /// An external source for source location entries.
   ExternalSLocEntrySource *ExternalSLocEntries = nullptr;
@@ -1659,14 +1688,14 @@ public:
   }
 
   /// Get the number of loaded SLocEntries we have.
-  unsigned loaded_sloc_entry_size() const { return LoadedSLocEntryTable.size();}
+  unsigned loaded_sloc_entry_size() const { return LoadedSLocEntryIndices.size(); }
 
   /// Get a loaded SLocEntry. This is exposed for indexing.
   const SrcMgr::SLocEntry &getLoadedSLocEntry(unsigned Index,
                                               bool *Invalid = nullptr) const {
-    assert(Index < LoadedSLocEntryTable.size() && "Invalid index");
-    if (SLocEntryLoaded[Index])
-      return LoadedSLocEntryTable[Index];
+    assert(Index < LoadedSLocEntryIndices.size() && "Invalid index");
+    if (auto I = LoadedSLocEntryIndices[Index])
+      return LoadedSLocEntryTable[*I];
     return loadSLocEntry(Index, Invalid);
   }
 
@@ -1682,7 +1711,7 @@ public:
   unsigned getNextLocalOffset() const { return NextLocalOffset; }
 
   void setExternalSLocEntrySource(ExternalSLocEntrySource *Source) {
-    assert(LoadedSLocEntryTable.empty() &&
+    assert(LoadedSLocEntryIndices.empty() &&
            "Invalidating existing loaded entries");
     ExternalSLocEntries = Source;
   }
