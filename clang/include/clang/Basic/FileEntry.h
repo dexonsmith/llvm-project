@@ -122,6 +122,7 @@ public:
   inline unsigned getUID() const;
   inline const llvm::sys::fs::UniqueID &getUniqueID() const;
   inline time_t getModificationTime() const;
+  inline void closeFile() const;
 
   explicit FileEntryRef(const MapEntry &ME) : FileEntryRefBase(&ME) {}
 };
@@ -240,6 +241,8 @@ const llvm::sys::fs::UniqueID &FileEntryRef::getUniqueID() const {
 time_t FileEntryRef::getModificationTime() const {
   return getFileEntry().getModificationTime();
 }
+
+void FileEntryRef::closeFile() const { getFileEntry().closeFile(); }
 
 } // end namespace clang
 

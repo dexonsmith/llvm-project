@@ -491,13 +491,10 @@ void CXIndexDataConsumer::importedModule(const ImportDecl *ImportD) {
     if (SrcMod->getTopLevelModule() == Mod->getTopLevelModule())
       return;
 
-  CXIdxImportedASTFileInfo Info = {
-                                    static_cast<CXFile>(
-                                    const_cast<FileEntry *>(Mod->getASTFile())),
-                                    Mod,
-                                    getIndexLoc(ImportD->getLocation()),
-                                    ImportD->isImplicit()
-                                  };
+  CXIdxImportedASTFileInfo Info = {static_cast<CXFile>(const_cast<FileEntry *>(
+                                       Mod->getASTFile().getFileEntry())),
+                                   Mod, getIndexLoc(ImportD->getLocation()),
+                                   ImportD->isImplicit()};
   CXIdxClientASTFile astFile = CB.importedASTFile(ClientData, &Info);
   (void)astFile;
 }
