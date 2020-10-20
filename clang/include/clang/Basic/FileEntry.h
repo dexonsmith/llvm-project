@@ -38,9 +38,9 @@ class FileEntry;
 /// accessed by the FileManager's client.
 class FileEntryRef {
 public:
-  const StringRef getName() const { return Entry->first(); }
+  StringRef getName() const { return ME->first(); }
   const FileEntry &getFileEntry() const {
-    return *Entry->second->V.get<FileEntry *>();
+    return *ME->second->V.get<FileEntry *>();
   }
 
   inline bool isValid() const;
@@ -49,10 +49,24 @@ public:
   inline const llvm::sys::fs::UniqueID &getUniqueID() const;
   inline time_t getModificationTime() const;
 
+  /// Check if the underlying FileEntry is the same, intentially ignoring
+  /// whether the file was referenced with the same spelling of the filename.
   friend bool operator==(const FileEntryRef &LHS, const FileEntryRef &RHS) {
-    return LHS.Entry == RHS.Entry;
+    return &LHS.getFileEntry() == &RHS.getFileEntry();
+  }
+  friend bool operator==(const FileEntry *LHS, const FileEntryRef &RHS) {
+    return LHS == &RHS.getFileEntry();
+  }
+  friend bool operator==(const FileEntryRef &LHS, const FileEntry *RHS) {
+    return &LHS.getFileEntry() == RHS;
   }
   friend bool operator!=(const FileEntryRef &LHS, const FileEntryRef &RHS) {
+    return !(LHS == RHS);
+  }
+  friend bool operator!=(const FileEntry *LHS, const FileEntryRef &RHS) {
+    return !(LHS == RHS);
+  }
+  friend bool operator!=(const FileEntryRef &LHS, const FileEntry *RHS) {
     return !(LHS == RHS);
   }
 
@@ -75,19 +89,136 @@ public:
     MapValue(MapEntry &ME) : V(&ME) {}
   };
 
-private:
-  friend class FileManager;
+  /// Check if RHS referenced the file in exactly the same way.
+  bool isSameRef(const FileEntryRef &RHS) const { return ME == RHS.ME; }
+
+  /// Allow FileEntryRef to degrade into FileEntry* to facilitate incremental
+  /// adoption.
+  operator const FileEntry *() const { return &getFileEntry(); }
 
   FileEntryRef() = delete;
-  explicit FileEntryRef(const MapEntry &Entry)
-      : Entry(&Entry) {
-    assert(Entry.second && "Expected payload");
-    assert(Entry.second->V && "Expected non-null");
-    assert(Entry.second->V.is<FileEntry *>() && "Expected FileEntry");
+  explicit FileEntryRef(const MapEntry &ME) : ME(&ME) {
+    assert(ME.second && "Expected payload");
+    assert(ME.second->V && "Expected non-null");
+    assert(ME.second->V.is<FileEntry *>() && "Expected FileEntry");
   }
 
-  const MapEntry *Entry;
+  /// Expose the underlying MapEntry to simplify packing in a PointerIntPair or
+  /// PointerUnion and allow construction in Optional.
+  const clang::FileEntryRef::MapEntry &getMapEntry() const { return *ME; }
+
+private:
+  const MapEntry *ME;
 };
+
+static_assert(sizeof(FileEntryRef) == sizeof(const FileEntry *),
+              "FileEntryRef must avoid size overhead");
+
+} // end namespace clang
+
+namespace llvm {
+
+/// Customize Optional<FileEntryRef> to use FileEntryRef::MapEntry directly
+/// in order to keep it to the size of a pointer.
+///
+/// Note that customizing OptionalStorage would not work, since the default
+/// implementation of Optional returns references and pointers to the stored
+/// value, and this customization does not store a full FileEntryRef.
+template <> class Optional<clang::FileEntryRef> {
+  const clang::FileEntryRef::MapEntry *ME = nullptr;
+
+public:
+  using value_type = clang::FileEntryRef;
+
+  Optional() {}
+  Optional(NoneType) {}
+
+  Optional(clang::FileEntryRef Ref) : ME(&Ref.getMapEntry()) {}
+  Optional(const Optional &O) = default;
+
+  /// Create a new object by constructing it in place with the given arguments.
+  template <typename... ArgTypes> void emplace(ArgTypes &&...Args) {
+    clang::FileEntryRef Ref(std::forward<ArgTypes>(Args)...);
+    *this = Ref;
+  }
+
+  static Optional create(const clang::FileEntryRef *Ref) {
+    return Ref ? Optional(*Ref) : Optional();
+  }
+
+  Optional &operator=(clang::FileEntryRef Ref) {
+    ME = &Ref.getMapEntry();
+    return *this;
+  }
+  Optional &operator=(const Optional &O) = default;
+
+  void reset() { ME = nullptr; }
+
+  /// Type for use as a "pointer" return for the arrow operator, encapsulating
+  /// a real FileEntryRef.
+  class pointer {
+    friend class Optional;
+
+  public:
+    const clang::FileEntryRef *operator->() const { return &Ref; }
+
+    pointer() = delete;
+    pointer(const pointer &p) = default;
+
+  private:
+    explicit pointer(clang::FileEntryRef Ref) : Ref(Ref) {}
+    clang::FileEntryRef Ref;
+  };
+
+  clang::FileEntryRef getValue() const LLVM_LVALUE_FUNCTION {
+    assert(ME && "Dereferencing None?");
+    return clang::FileEntryRef(*ME);
+  }
+
+  explicit operator bool() const { return hasValue(); }
+  bool hasValue() const { return ME; }
+  pointer operator->() const { return pointer(getValue()); }
+  clang::FileEntryRef operator*() const LLVM_LVALUE_FUNCTION {
+    return getValue();
+  }
+
+  template <typename U>
+  clang::FileEntryRef getValueOr(U &&value) const LLVM_LVALUE_FUNCTION {
+    return hasValue() ? getValue() : std::forward<U>(value);
+  }
+
+  /// Apply a function to the value if present; otherwise return None.
+  template <class Function>
+  auto map(const Function &F) const LLVM_LVALUE_FUNCTION
+      -> Optional<decltype(F(getValue()))> {
+    if (*this)
+      return F(getValue());
+    return None;
+  }
+
+  /// Allow Optional<FileEntryRef> to degrade into FileEntry* to facilitate
+  /// incremental adoption of FileEntryRef. Once FileEntry::getName, remaining
+  /// uses of this should be cleaned up and this can be removed as well.
+  operator const clang::FileEntry *() const {
+    return hasValue() ? &getValue().getFileEntry() : nullptr;
+  }
+
+  /// Allow construction from the underlying pointer type to simplify
+  /// constructing from a PointerIntPair or PointerUnion.
+  explicit Optional(const clang::FileEntryRef::MapEntry *ME) : ME(ME) {}
+
+  /// Expose the underlying pointer type to simplify packing in a
+  /// PointerIntPair or PointerUnion.
+  const clang::FileEntryRef::MapEntry *getMapEntry() const { return ME; }
+};
+
+static_assert(sizeof(Optional<clang::FileEntryRef>) ==
+                  sizeof(clang::FileEntryRef),
+              "Optional<FileEntryRef> must avoid size overhead");
+
+} // end namespace llvm
+
+namespace clang {
 
 /// Cached information about one file (either on disk
 /// or in the virtual file system).
@@ -144,10 +275,6 @@ public:
   bool isNamedPipe() const { return IsNamedPipe; }
 
   void closeFile() const;
-
-  // Only for use in tests to see if deferred opens are happening, rather than
-  // relying on RealPathName being empty.
-  bool isOpenForTests() const { return File != nullptr; }
 };
 
 bool FileEntryRef::isValid() const { return getFileEntry().isValid(); }
