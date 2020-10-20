@@ -34,28 +34,8 @@ namespace clang {
 class DirectoryEntry;
 class FileEntry;
 
-/// A reference to a \c FileEntry that includes the name of the file as it was
-/// accessed by the FileManager's client.
-class FileEntryRef {
+class FileEntryRefBase {
 public:
-  const StringRef getName() const { return Entry->first(); }
-  const FileEntry &getFileEntry() const {
-    return *Entry->second->V.get<FileEntry *>();
-  }
-
-  inline bool isValid() const;
-  inline off_t getSize() const;
-  inline unsigned getUID() const;
-  inline const llvm::sys::fs::UniqueID &getUniqueID() const;
-  inline time_t getModificationTime() const;
-
-  friend bool operator==(const FileEntryRef &LHS, const FileEntryRef &RHS) {
-    return LHS.Entry == RHS.Entry;
-  }
-  friend bool operator!=(const FileEntryRef &LHS, const FileEntryRef &RHS) {
-    return !(LHS == RHS);
-  }
-
   struct MapValue;
 
   /// Type used in the StringMap.
@@ -75,18 +55,119 @@ public:
     MapValue(MapEntry &ME) : V(&ME) {}
   };
 
-private:
-  friend class FileManager;
+  /// Check if RHS referenced the file in exactly the same way.
+  bool isSameRef(const FileEntryRefBase &RHS) const { return ME == RHS.ME; }
 
-  FileEntryRef() = delete;
-  explicit FileEntryRef(const MapEntry &Entry)
-      : Entry(&Entry) {
-    assert(Entry.second && "Expected payload");
-    assert(Entry.second->V && "Expected non-null");
-    assert(Entry.second->V.is<FileEntry *>() && "Expected FileEntry");
+  /// Check if the underlying FileEntry is the same, intentially ignoring
+  /// whether the file was referenced with the same spelling of the filename.
+  friend bool operator==(const FileEntryRefBase &LHS,
+                         const FileEntryRefBase &RHS) {
+    return LHS.getFileEntry() == RHS.getFileEntry();
+  }
+  friend bool operator==(const FileEntry *LHS, const FileEntryRefBase &RHS) {
+    return LHS == RHS.getFileEntry();
+  }
+  friend bool operator==(const FileEntryRefBase &LHS, const FileEntry *RHS) {
+    return LHS.getFileEntry() == RHS;
+  }
+  friend bool operator!=(const FileEntryRefBase &LHS,
+                         const FileEntryRefBase &RHS) {
+    return !(LHS == RHS);
+  }
+  friend bool operator!=(const FileEntry *LHS, const FileEntryRefBase &RHS) {
+    return !(LHS == RHS);
+  }
+  friend bool operator!=(const FileEntryRefBase &LHS, const FileEntry *RHS) {
+    return !(LHS == RHS);
   }
 
-  const MapEntry *Entry;
+protected:
+  FileEntryRefBase() = delete;
+  explicit FileEntryRefBase(const MapEntry *ME) : ME(ME) {
+    if (!ME)
+      return;
+    assert(ME->second && "Expected payload");
+    assert(ME->second->V && "Expected non-null");
+    assert(ME->second->V.is<FileEntry *>() && "Expected FileEntry");
+  }
+
+  Optional<StringRef> getName() const {
+    return ME ? ME->first() : Optional<StringRef>();
+  }
+
+  const FileEntry *getFileEntry() const {
+    return ME ? ME->second->V.get<FileEntry *>() : nullptr;
+  }
+
+  const MapEntry *ME;
+};
+
+/// A reference to a \c FileEntry that includes the name of the file as it was
+/// accessed by the FileManager's client.
+class FileEntryRef : public FileEntryRefBase {
+  friend class MaybeFileEntryRef;
+
+public:
+  StringRef getName() const { return *FileEntryRefBase::getName(); }
+  const FileEntry &getFileEntry() const {
+    return *FileEntryRefBase::getFileEntry();
+  }
+
+  /// Allow FileEntryRef to degrade into FileEntry* to facilitate incremental
+  /// adoption.
+  operator const FileEntry *() const { return &getFileEntry(); }
+
+  inline bool isValid() const;
+  inline off_t getSize() const;
+  inline unsigned getUID() const;
+  inline const llvm::sys::fs::UniqueID &getUniqueID() const;
+  inline time_t getModificationTime() const;
+
+  explicit FileEntryRef(const MapEntry &ME) : FileEntryRefBase(&ME) {}
+};
+
+class MaybeFileEntryRef : public FileEntryRefBase {
+public:
+  using FileEntryRefBase::getFileEntry;
+  using FileEntryRefBase::getName;
+
+  /// Allow MaybeFileEntryRef to degrade into FileEntry* to facilitate
+  /// incremental adoption.
+  operator const FileEntry *() const { return getFileEntry(); }
+
+  explicit operator bool() const { return ME; }
+
+  FileEntryRef operator*() const {
+    assert(ME && "Dereferencing null?");
+    return FileEntryRef(*ME);
+  }
+
+  /// Use Optional<FileEntryRef> to provide storage for arrow.
+  Optional<FileEntryRef> operator->() const { return *this; }
+
+  friend bool operator==(llvm::NoneType, const MaybeFileEntryRef &RHS) {
+    return !RHS;
+  }
+  friend bool operator==(const MaybeFileEntryRef &LHS, llvm::NoneType) {
+    return !LHS;
+  }
+  friend bool operator!=(llvm::NoneType LHS, const MaybeFileEntryRef &RHS) {
+    return !(LHS == RHS);
+  }
+  friend bool operator!=(const MaybeFileEntryRef &LHS, llvm::NoneType RHS) {
+    return !(LHS == RHS);
+  }
+
+  /// Implicitly convert to/from Optional<FileEntryRef>.
+  operator Optional<FileEntryRef>() const {
+    return ME ? FileEntryRef(*ME) : Optional<FileEntryRef>();
+  }
+  MaybeFileEntryRef(Optional<FileEntryRef> F)
+      : FileEntryRefBase(F ? F->ME : nullptr) {}
+
+  explicit MaybeFileEntryRef(const MapEntry *ME) : FileEntryRefBase(ME) {}
+  MaybeFileEntryRef(llvm::NoneType = None) : FileEntryRefBase(nullptr) {}
+  MaybeFileEntryRef(FileEntryRef F) : FileEntryRefBase(F) {}
 };
 
 /// Cached information about one file (either on disk
@@ -115,7 +196,7 @@ class FileEntry {
   // default constructor). It should always have a value in practice.
   //
   // TODO: remote this once everyone that needs a name uses FileEntryRef.
-  Optional<FileEntryRef> LastRef;
+  MaybeFileEntryRef LastRef;
 
 public:
   FileEntry();
@@ -144,10 +225,6 @@ public:
   bool isNamedPipe() const { return IsNamedPipe; }
 
   void closeFile() const;
-
-  // Only for use in tests to see if deferred opens are happening, rather than
-  // relying on RealPathName being empty.
-  bool isOpenForTests() const { return File != nullptr; }
 };
 
 bool FileEntryRef::isValid() const { return getFileEntry().isValid(); }
