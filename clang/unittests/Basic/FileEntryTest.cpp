@@ -112,6 +112,7 @@ TEST(FileEntryTest, isSameRef) {
   FileEntryRef R1Also = addRef(Refs, "1-also", E1);
 
   EXPECT_TRUE(R1.isSameRef(FileEntryRef(R1)));
+  EXPECT_TRUE(R1.isSameRef(FileEntryRef(R1.getMapEntry())));
   EXPECT_FALSE(R1.isSameRef(R2));
   EXPECT_FALSE(R1.isSameRef(R1Also));
 
@@ -123,6 +124,7 @@ TEST(FileEntryTest, isSameRef) {
   EXPECT_FALSE(M0.isSameRef(M1));
   EXPECT_FALSE(M1.isSameRef(M0));
   EXPECT_TRUE(M1.isSameRef(MaybeFileEntryRef(M1)));
+  EXPECT_TRUE(M1.isSameRef(MaybeFileEntryRef(M1.getMapEntry())));
   EXPECT_FALSE(M1.isSameRef(M1Also));
   EXPECT_FALSE(M1.isSameRef(M2));
   EXPECT_TRUE(M1.isSameRef(R1));

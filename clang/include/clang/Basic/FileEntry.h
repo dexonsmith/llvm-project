@@ -124,6 +124,8 @@ public:
   inline time_t getModificationTime() const;
   inline void closeFile() const;
 
+  const MapEntry &getMapEntry() const { return *ME; }
+
   explicit FileEntryRef(const MapEntry &ME) : FileEntryRefBase(&ME) {}
 };
 
@@ -165,6 +167,8 @@ public:
   }
   MaybeFileEntryRef(Optional<FileEntryRef> F)
       : FileEntryRefBase(F ? F->ME : nullptr) {}
+
+  const MapEntry *getMapEntry() const { return ME; }
 
   explicit MaybeFileEntryRef(const MapEntry *ME) : FileEntryRefBase(ME) {}
   MaybeFileEntryRef(llvm::NoneType = None) : FileEntryRefBase(nullptr) {}
