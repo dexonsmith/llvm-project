@@ -303,7 +303,7 @@ public:
   FileEntry(const FileEntry &) = delete;
   FileEntry &operator=(const FileEntry &) = delete;
 
-  StringRef getName() const { return LastRef->getName(); }
+  __attribute__((deprecated)) StringRef getName() const { return LastRef->getName(); }
   FileEntryRef getLastRef() const { return *LastRef; }
 
   StringRef tryGetRealPathName() const { return RealPathName; }
