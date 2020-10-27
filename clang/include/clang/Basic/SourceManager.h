@@ -516,6 +516,28 @@ public:
   }
 };
 
+/// Reference to an SLocEntry that is stable if the storage is reallocated.
+class SLocEntryRef {
+public:
+  unsigned getOffset() const { return getEntry().Offset; }
+
+  bool isExpansion() const { return getEntry().IsExpansion; }
+  bool isFile() const { return !getEntry().isExpansion(); }
+
+  const FileInfo &getFile() const { return getEntry().getFile(); }
+  const ExpansionInfo &getExpansion() const { return getEntry().getExpansion(); }
+
+  SLocEntryRef() = delete;
+  SLocEntryRef(const SmallVectorImpl<SLocEntry> &Storage, unsigned Index)
+      : Storage(&Storage), Index(Index) {}
+
+private:
+  const SLocEntry &getEntry() const { return (*Storage)[Index]; }
+
+  const SmallVectorImpl<SLocEntry> *Storage;
+  unsigned Index;
+};
+
 } // namespace SrcMgr
 
 /// External source of source location entries.
