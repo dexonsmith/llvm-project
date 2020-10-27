@@ -138,6 +138,46 @@ public:
   }
 };
 
+template <typename T> class OptionalStorage<T &, true> {
+  T *value = nullptr;
+
+public:
+  ~OptionalStorage() = default;
+
+  constexpr OptionalStorage() noexcept {}
+
+  constexpr OptionalStorage(OptionalStorage const &other) = default;
+  constexpr OptionalStorage(OptionalStorage &&other) = default;
+
+  OptionalStorage &operator=(OptionalStorage const &other) = default;
+  OptionalStorage &operator=(OptionalStorage &&other) = default;
+
+  void reset() noexcept { value = nullptr; }
+
+  constexpr bool hasValue() const noexcept { return value; }
+
+  T &getValue() LLVM_LVALUE_FUNCTION noexcept {
+    assert(value);
+    return *value;
+  }
+  constexpr T const &getValue() const LLVM_LVALUE_FUNCTION noexcept {
+    assert(hasVal);
+    return *value;
+  }
+#if LLVM_HAS_RVALUE_REFERENCE_THIS
+  T &&getValue() && noexcept {
+    assert(hasVal);
+    return std::move(*value);
+  }
+#endif
+
+  template <class... Args> void emplace(Args &&... args) {
+    reset();
+    ::new ((void *)std::addressof(value)) T(std::forward<Args>(args)...);
+    hasVal = true;
+  }
+};
+
 template <typename T> class OptionalStorage<T, true> {
   union {
     char empty;
