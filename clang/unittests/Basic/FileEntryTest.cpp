@@ -42,13 +42,14 @@ TEST(FileEntryTest, FileEntryRef) {
   EXPECT_EQ(CE1, &E1);
 }
 
-TEST(FileEntryTest, OptionalFileEntryRef) {
+TEST(FileEntryTest, OptionalFileEntryRefDegradesToFileEntryPtr) {
   MapType Refs;
   FileEntry E1, E2;
-  Optional<FileEntryRef> M0;
-  Optional<FileEntryRef> M1 = addRef(Refs, "1", E1);
-  Optional<FileEntryRef> M2 = addRef(Refs, "2", E2);
-  Optional<FileEntryRef> M1Also = addRef(Refs, "1-also", E1);
+  OptionalFileEntryRefDegradesToFileEntryPtr M0;
+  OptionalFileEntryRefDegradesToFileEntryPtr M1 = addRef(Refs, "1", E1);
+  OptionalFileEntryRefDegradesToFileEntryPtr M2 = addRef(Refs, "2", E2);
+  OptionalFileEntryRefDegradesToFileEntryPtr M1Also =
+      addRef(Refs, "1-also", E1);
 
   EXPECT_EQ(StringRef("1"), M1->getName());
   EXPECT_EQ(StringRef("2"), M2->getName());
@@ -76,8 +77,8 @@ TEST(FileEntryTest, equals) {
   EXPECT_NE(&E2, R1);
   EXPECT_NE(R1, R2);
 
-  Optional<FileEntryRef> M0;
-  Optional<FileEntryRef> M1 = R1;
+  OptionalFileEntryRefDegradesToFileEntryPtr M0;
+  OptionalFileEntryRefDegradesToFileEntryPtr M1 = R1;
 
   EXPECT_EQ(M1, &E1);
   EXPECT_EQ(&E1, M1);
