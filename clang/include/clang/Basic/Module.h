@@ -126,7 +126,7 @@ public:
   /// The build directory of this module. This is the directory in
   /// which the module is notionally built, and relative to which its headers
   /// are found.
-  const DirectoryEntry *Directory = nullptr;
+  Optional<DirectoryEntryRef> Directory;
 
   /// The presumed file name for the module map defining this module.
   /// Only non-empty when building from preprocessed source.
@@ -165,7 +165,7 @@ private:
   Optional<FileEntryRef> ASTFile;
 
   /// The top-level headers associated with this module.
-  llvm::SmallSetVector<const FileEntry *, 2> TopHeaders;
+  llvm::SmallSetVector<FileEntryRef, 2> TopHeaders;
 
   /// top-level header filenames that aren't resolved to FileEntries yet.
   std::vector<std::string> TopHeaderNames;
@@ -558,7 +558,7 @@ public:
   }
 
   /// Add a top-level header associated with this module.
-  void addTopHeader(const FileEntry *File);
+  void addTopHeader(FileEntryRef File);
 
   /// Add a top-level header filename associated with this module.
   void addTopHeaderFilename(StringRef Filename) {
@@ -566,7 +566,7 @@ public:
   }
 
   /// The top-level headers associated with this module.
-  ArrayRef<const FileEntry *> getTopHeaders(FileManager &FileMgr);
+  ArrayRef<FileEntryRef> getTopHeaders(FileManager &FileMgr);
 
   /// Determine whether this module has declared its intention to
   /// directly use another module.

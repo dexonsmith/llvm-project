@@ -1414,14 +1414,14 @@ namespace clang {
     ModuleMap &Map;
 
     /// The current module map file.
-    const FileEntry *ModuleMapFile;
+    FileEntryRef ModuleMapFile;
 
     /// Source location of most recent parsed module declaration
     SourceLocation CurrModuleDeclLoc;
 
     /// The directory that file names in this module map file should
     /// be resolved relative to.
-    const DirectoryEntry *Directory;
+    DirectoryEntryRef Directory;
 
     /// Whether this module map is in a system header directory.
     bool IsSystem;
@@ -1486,8 +1486,8 @@ namespace clang {
   public:
     explicit ModuleMapParser(Lexer &L, SourceManager &SourceMgr,
                              const TargetInfo *Target, DiagnosticsEngine &Diags,
-                             ModuleMap &Map, const FileEntry *ModuleMapFile,
-                             const DirectoryEntry *Directory, bool IsSystem)
+                             ModuleMap &Map, FileEntryRef ModuleMapFile,
+                             DirectoryEntryRef Directory, bool IsSystem)
         : L(L), SourceMgr(SourceMgr), Target(Target), Diags(Diags), Map(Map),
           ModuleMapFile(ModuleMapFile), Directory(Directory),
           IsSystem(IsSystem) {
@@ -2984,8 +2984,8 @@ bool ModuleMapParser::parseModuleMapFile() {
   } while (true);
 }
 
-bool ModuleMap::parseModuleMapFile(const FileEntry *File, bool IsSystem,
-                                   const DirectoryEntry *Dir, FileID ID,
+bool ModuleMap::parseModuleMapFile(FileEntryRef File, bool IsSystem,
+                                   DirectoryEntryRef Dir, FileID ID,
                                    unsigned *Offset,
                                    SourceLocation ExternModuleLoc) {
   assert(Target && "Missing target information");

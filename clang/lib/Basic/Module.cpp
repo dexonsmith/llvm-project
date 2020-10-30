@@ -253,16 +253,16 @@ Module::DirectoryName Module::getUmbrellaDir() const {
   return {"", None};
 }
 
-void Module::addTopHeader(const FileEntry *File) {
+void Module::addTopHeader(FileEntryRef File) {
   assert(File);
   TopHeaders.insert(File);
 }
 
-ArrayRef<const FileEntry *> Module::getTopHeaders(FileManager &FileMgr) {
+ArrayRef<FileEntryRef> Module::getTopHeaders(FileManager &FileMgr) {
   if (!TopHeaderNames.empty()) {
     for (std::vector<std::string>::iterator
            I = TopHeaderNames.begin(), E = TopHeaderNames.end(); I != E; ++I) {
-      if (auto FE = FileMgr.getFile(*I))
+      if (auto FE = expectedToOptional(FileMgr.getFileRef(*I)))
         TopHeaders.insert(*FE);
     }
     TopHeaderNames.clear();
