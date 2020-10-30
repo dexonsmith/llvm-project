@@ -16,6 +16,7 @@
 
 #include "clang/Basic/DirectoryEntry.h"
 #include "clang/Basic/LLVM.h"
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -150,9 +151,19 @@ private:
   friend class FileMgr::MapEntryOptionalStorage<FileEntryRef>;
   struct optional_none_tag {};
 
-  // Private constructor for use by OptionalStorage.
+  /// Private constructor for use by OptionalStorage.
   FileEntryRef(optional_none_tag) : ME(nullptr) {}
   bool hasOptionalValue() const { return ME; }
+
+  friend struct llvm::DenseMapInfo<FileEntryRef>;
+  struct dense_map_empty_tag {};
+  struct dense_map_tombstone_tag {};
+
+  /// Private constructors for use by DenseMapInfo.
+  FileEntryRef(dense_map_empty_tag)
+      : ME(llvm::DenseMapInfo<const MapEntry *>::getEmptyKey()) {}
+  FileEntryRef(dense_map_tombstone_tag)
+      : ME(llvm::DenseMapInfo<const MapEntry *>::getTombstoneKey()) {}
 
   const MapEntry *ME;
 };
@@ -197,6 +208,43 @@ static_assert(std::is_trivially_copyable<Optional<clang::FileEntryRef>>::value,
               "Optional<FileEntryRef> should be trivially copyable");
 
 } // end namespace optional_detail
+
+/// Specialisation of DenseMapInfo for FileEntryRef.
+template <> struct DenseMapInfo<clang::FileEntryRef> {
+  static inline clang::FileEntryRef getEmptyKey() {
+    return clang::FileEntryRef(clang::FileEntryRef::dense_map_empty_tag());
+  }
+
+  static inline clang::FileEntryRef getTombstoneKey() {
+    return clang::FileEntryRef(clang::FileEntryRef::dense_map_tombstone_tag());
+  }
+
+  static unsigned getHashValue(clang::FileEntryRef Val) {
+    assert(Val.ME != getEmptyKey().ME && "Cannot hash the empty key!");
+    assert(Val.ME != getTombstoneKey().ME && "Cannot hash the tombstone key!");
+
+    return DenseMapInfo<const clang::FileEntry *>::getHashValue(
+        &Val.getFileEntry());
+  }
+
+  static bool isEqual(clang::FileEntryRef LHS, clang::FileEntryRef RHS) {
+    // Catch the easy cases: both empty, both tombstone, or the same ref.
+    if (LHS.ME == RHS.ME)
+      return true;
+
+    auto Empty = getEmptyKey();
+    auto Tombstone = getTombstoneKey();
+    if (LHS.ME == Empty.ME || LHS.ME == Tombstone.ME)
+      return false;
+    if (RHS.ME == Empty.ME || RHS.ME == Tombstone.ME)
+      return false;
+
+    // LHS and RHS are both valid FileEntryRefs and it's safe to use
+    // operator==.
+    return LHS == RHS;
+  }
+};
+
 } // end namespace llvm
 
 namespace clang {
