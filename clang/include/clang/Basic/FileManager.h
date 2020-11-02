@@ -73,6 +73,10 @@ class FileManager : public RefCountedBase<FileManager> {
   /// conflicting filenames.
   SmallVector<std::unique_ptr<FileEntry>, 0> BypassFileEntries;
 
+  /// A set of files that bypass the maps and uniquing.  They can have
+  /// conflicting filenames.
+  SmallVector<std::unique_ptr<FileEntry>, 0> AnonymousFileEntries;
+
   /// A cache that maps paths to directory entries (either real or
   /// virtual) we have looked up, or an error that occurred when we looked up
   /// the directory.
@@ -248,6 +252,45 @@ public:
   const FileEntry *getVirtualFile(StringRef Filename, off_t Size,
                                   time_t ModificationTime);
 
+  /// Get a virtual FileEntry with the given content, taking the name from the
+  /// Buffer, and associating it with the given ContextID.
+  const FileEntry &
+  getAnonymousFileWithContent(const void *ContextID,
+                              std::unique_ptr<llvm::MemoryBuffer> Buffer);
+
+  /// Clean up anonymous files created for the given ContextID.
+  void cleanUpAnonymousFiles(const void *ContextID);
+
+  /// Override the content of an existing FileEntry.
+  void overrideFileContent(const FileEntry &FE,
+                           std::unique_ptr<llvm::MemoryBuffer> Buffer);
+
+  /// Make a new (virtual) FileEntry and override its content.
+  FileEntryRef
+  getVirtualFileWithContent(StringRef Filename,
+                            std::unique_ptr<llvm::MemoryBuffer> Buffer,
+                            time_t ModificationTime);
+
+  struct MemoryBufferSizes {
+    const size_t malloc_bytes;
+    const size_t mmap_bytes;
+
+    MemoryBufferSizes(size_t malloc_bytes, size_t mmap_bytes)
+      : malloc_bytes(malloc_bytes), mmap_bytes(mmap_bytes) {}
+  };
+
+  /// Return the amount of memory used by memory buffers, breaking down
+  /// by heap-backed versus mmap'ed memory.
+  MemoryBufferSizes getMemoryBufferSizes() const;
+
+
+  /// Make a new FileEntryRef called Filename that points at FE.
+  FileEntryRef getVirtualFileRef(StringRef Filename, const FileEntry &FE);
+
+  /// Make a new FileEntry named Filename that redirects its content to FE.
+  FileEntryRef getRedirectedVirtualFile(StringRef Filename,
+                                        const FileEntry &FE);
+
   /// Retrieve a FileEntry that bypasses VFE, which is expected to be a virtual
   /// file entry, to access the real file.  The returned FileEntry will have
   /// the same filename as FE but a different identity and its own stat.
@@ -260,7 +303,7 @@ public:
 
   /// Open the specified file as a MemoryBuffer, returning a new
   /// MemoryBuffer if successful, otherwise returning null.
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
+  llvm::ErrorOr<llvm::MemoryBufferRef>
   getBufferForFile(const FileEntry *Entry, bool isVolatile = false,
                    bool RequiresNullTerminator = true);
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>

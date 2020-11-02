@@ -504,7 +504,7 @@ std::size_t ParsedAST::getUsedBytes() const {
 
   Total += AST.getSourceManager().getContentCacheSize();
   Total += AST.getSourceManager().getDataStructureSizes();
-  Total += AST.getSourceManager().getMemoryBufferSizes().malloc_bytes;
+  Total += AST.getFileManager().getMemoryBufferSizes().malloc_bytes;
 
   if (ExternalASTSource *Ext = AST.getExternalSource())
     Total += Ext->getMemoryBufferSizes().malloc_bytes;

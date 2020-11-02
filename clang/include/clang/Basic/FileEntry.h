@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem/UniqueID.h"
+#include "llvm/Support/MemoryBufferRef.h"
 
 namespace llvm {
 namespace vfs {
@@ -28,6 +29,9 @@ namespace vfs {
 class File;
 
 } // namespace vfs
+
+class MemoryBuffer;
+
 } // namespace llvm
 
 namespace clang {
@@ -290,6 +294,12 @@ class FileEntry {
   /// The open file, if it is owned by the \p FileEntry.
   mutable std::unique_ptr<llvm::vfs::File> File;
 
+  /// The buffer containing the characters from the input file.
+  mutable llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> Content;
+
+  /// The FileEntry that contains the actual contents.
+  mutable const FileEntry *RedirectedContent = nullptr;
+
   // First access name for this FileEntry.
   //
   // This is Optional only to allow delayed construction (FileEntryRef has no
@@ -317,6 +327,24 @@ public:
 
   /// Return the directory the file lives in.
   const DirectoryEntry *getDir() const { return Dir; }
+
+  /// Get a reference to the current buffer.
+  llvm::ErrorOr<llvm::MemoryBufferRef> getCachedContent() const {
+    if (RedirectedContent)
+      return RedirectedContent->getCachedContent();
+    if (Content)
+      return llvm::MemoryBufferRef(**Content);
+    return Content.getError();
+  }
+
+  /// Use the contents of FE for all queries.
+  void redirectContent(const FileEntry &FE) const { RedirectedContent = &FE; }
+
+  /// Load the contents from a file.
+  void loadContent() const;
+
+  /// Override the contents buffer.
+  void overrideContent(std::unique_ptr<llvm::MemoryBuffer> Buffer);
 
   bool operator<(const FileEntry &RHS) const { return UniqueID < RHS.UniqueID; }
 

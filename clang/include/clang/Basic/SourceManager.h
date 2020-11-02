@@ -123,13 +123,7 @@ private:
 };
 
 /// One instance of this struct is kept for every file loaded or used.
-///
-/// This object owns the MemoryBuffer object.
 class alignas(8) ContentCache {
-  /// The actual buffer containing the characters from the input
-  /// file.
-  mutable std::unique_ptr<llvm::MemoryBuffer> Buffer;
-
 public:
   /// Reference to the file entry representing this ContentCache.
   ///
@@ -151,6 +145,8 @@ public:
   ///
   /// FIXME: Remove this once OrigEntry is a FileEntryRef with a stable name.
   StringRef Filename;
+
+  std::unique_ptr<llvm::MemoryBuffer> WriteableBuffer;
 
   /// A bump pointer allocated array of offsets for each source line.
   ///
@@ -174,25 +170,30 @@ public:
   /// after serialization and deserialization.
   unsigned IsTransient : 1;
 
+  /// True if contents are known to be valid.
+  mutable unsigned IsBufferValid : 1;
+
+  /// True if contents are known to be invalid.
   mutable unsigned IsBufferInvalid : 1;
 
   ContentCache(const FileEntry *Ent = nullptr) : ContentCache(Ent, Ent) {}
 
   ContentCache(const FileEntry *Ent, const FileEntry *contentEnt)
       : OrigEntry(Ent), ContentsEntry(contentEnt), BufferOverridden(false),
-        IsFileVolatile(false), IsTransient(false), IsBufferInvalid(false) {}
+        IsFileVolatile(false), IsTransient(false), IsBufferValid(false),
+        IsBufferInvalid(false) {}
 
   /// The copy ctor does not allow copies where source object has either
   /// a non-NULL Buffer or SourceLineCache.  Ownership of allocated memory
   /// is not transferred, so this is a logical error.
   ContentCache(const ContentCache &RHS)
       : BufferOverridden(false), IsFileVolatile(false), IsTransient(false),
-        IsBufferInvalid(false) {
+        IsBufferValid(false), IsBufferInvalid(false) {
     OrigEntry = RHS.OrigEntry;
     ContentsEntry = RHS.ContentsEntry;
 
-    assert(!RHS.Buffer && !RHS.SourceLineCache &&
-           "Passed ContentCache object cannot own a buffer.");
+    assert(!RHS.SourceLineCache &&
+           "Passed ContentCache object cannot own a source line cache.");
   }
 
   ContentCache &operator=(const ContentCache &RHS) = delete;
@@ -222,39 +223,26 @@ public:
   /// This can be 0 if the MemBuffer was not actually expanded.
   unsigned getSizeBytesMapped() const;
 
-  /// Returns the kind of memory used to back the memory buffer for
-  /// this content cache.  This is used for performance analysis.
-  llvm::MemoryBuffer::BufferKind getMemoryBufferKind() const;
-
   /// Return the buffer, only if it has been loaded.
   llvm::Optional<llvm::MemoryBufferRef> getBufferIfLoaded() const {
-    if (Buffer)
-      return Buffer->getMemBufferRef();
+    if (WriteableBuffer)
+      return WriteableBuffer->getMemBufferRef();
+    if (ContentsEntry)
+      if (auto Buffer = ContentsEntry->getCachedContent())
+        return *Buffer;
     return None;
   }
 
   /// Return a StringRef to the source buffer data, only if it has already
   /// been loaded.
   llvm::Optional<StringRef> getBufferDataIfLoaded() const {
-    if (Buffer)
+    if (auto Buffer = getBufferIfLoaded())
       return Buffer->getBuffer();
     return None;
   }
 
   /// Set the buffer.
-  void setBuffer(std::unique_ptr<llvm::MemoryBuffer> B) {
-    IsBufferInvalid = false;
-    Buffer = std::move(B);
-  }
-
-  /// Set the buffer to one that's not owned (or to nullptr).
-  ///
-  /// \pre Buffer cannot already be set.
-  void setUnownedBuffer(llvm::Optional<llvm::MemoryBufferRef> B) {
-    assert(!Buffer && "Expected to be called right after construction");
-    if (B)
-      setBuffer(llvm::MemoryBuffer::getMemBuffer(*B));
-  }
+  void setBuffer(std::unique_ptr<llvm::MemoryBuffer> B);
 
   // If BufStr has an invalid BOM, returns the BOM name; otherwise, returns
   // nullptr
@@ -764,9 +752,6 @@ class SourceManager : public RefCountedBase<SourceManager> {
   /// Return the cache entry for comparing the given file IDs
   /// for isBeforeInTranslationUnit.
   InBeforeInTUCacheEntry &getInBeforeInTUCache(FileID LFID, FileID RFID) const;
-
-  // Cache for the "fake" buffer used for error-recovery purposes.
-  mutable std::unique_ptr<llvm::MemoryBuffer> FakeBufferForRecovery;
 
   mutable std::unique_ptr<SrcMgr::ContentCache> FakeContentCacheForRecovery;
 
@@ -1549,18 +1534,6 @@ public:
   size_t getContentCacheSize() const {
     return ContentCacheAlloc.getTotalMemory();
   }
-
-  struct MemoryBufferSizes {
-    const size_t malloc_bytes;
-    const size_t mmap_bytes;
-
-    MemoryBufferSizes(size_t malloc_bytes, size_t mmap_bytes)
-      : malloc_bytes(malloc_bytes), mmap_bytes(mmap_bytes) {}
-  };
-
-  /// Return the amount of memory used by memory buffers, breaking down
-  /// by heap-backed versus mmap'ed memory.
-  MemoryBufferSizes getMemoryBufferSizes() const;
 
   /// Return the amount of memory used for various side tables and
   /// data structures in the SourceManager.

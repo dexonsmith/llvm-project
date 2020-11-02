@@ -54,15 +54,15 @@ std::unique_ptr<HeaderMap> HeaderMap::Create(const FileEntry *FE,
   if (FileSize <= sizeof(HMapHeader)) return nullptr;
 
   auto FileBuffer = FM.getBufferForFile(FE);
-  if (!FileBuffer || !*FileBuffer)
+  if (!FileBuffer)
     return nullptr;
   bool NeedsByteSwap;
-  if (!checkHeader(**FileBuffer, NeedsByteSwap))
+  if (!checkHeader(*FileBuffer, NeedsByteSwap))
     return nullptr;
-  return std::unique_ptr<HeaderMap>(new HeaderMap(std::move(*FileBuffer), NeedsByteSwap));
+  return std::unique_ptr<HeaderMap>(new HeaderMap(*FileBuffer, NeedsByteSwap));
 }
 
-bool HeaderMapImpl::checkHeader(const llvm::MemoryBuffer &File,
+bool HeaderMapImpl::checkHeader(const llvm::MemoryBufferRef &File,
                                 bool &NeedsByteSwap) {
   if (File.getBufferSize() <= sizeof(HMapHeader))
     return false;
@@ -107,7 +107,7 @@ bool HeaderMapImpl::checkHeader(const llvm::MemoryBuffer &File,
 
 /// getFileName - Return the filename of the headermap.
 StringRef HeaderMapImpl::getFileName() const {
-  return FileBuffer->getBufferIdentifier();
+  return FileBuffer.getBufferIdentifier();
 }
 
 unsigned HeaderMapImpl::getEndianAdjustedWord(unsigned X) const {
@@ -119,23 +119,22 @@ unsigned HeaderMapImpl::getEndianAdjustedWord(unsigned X) const {
 /// This method cannot fail.
 const HMapHeader &HeaderMapImpl::getHeader() const {
   // We know the file is at least as big as the header.  Return it.
-  return *reinterpret_cast<const HMapHeader*>(FileBuffer->getBufferStart());
+  return *reinterpret_cast<const HMapHeader *>(FileBuffer.getBufferStart());
 }
 
 /// getBucket - Return the specified hash table bucket from the header map,
 /// bswap'ing its fields as appropriate.  If the bucket number is not valid,
 /// this return a bucket with an empty key (0).
 HMapBucket HeaderMapImpl::getBucket(unsigned BucketNo) const {
-  assert(FileBuffer->getBufferSize() >=
+  assert(FileBuffer.getBufferSize() >=
              sizeof(HMapHeader) + sizeof(HMapBucket) * BucketNo &&
          "Expected bucket to be in range");
 
   HMapBucket Result;
   Result.Key = HMAP_EmptyBucketKey;
 
-  const HMapBucket *BucketArray =
-    reinterpret_cast<const HMapBucket*>(FileBuffer->getBufferStart() +
-                                        sizeof(HMapHeader));
+  const HMapBucket *BucketArray = reinterpret_cast<const HMapBucket *>(
+      FileBuffer.getBufferStart() + sizeof(HMapHeader));
   const HMapBucket *BucketPtr = BucketArray+BucketNo;
 
   // Load the values, bswapping as needed.
@@ -150,11 +149,11 @@ Optional<StringRef> HeaderMapImpl::getString(unsigned StrTabIdx) const {
   StrTabIdx += getEndianAdjustedWord(getHeader().StringsOffset);
 
   // Check for invalid index.
-  if (StrTabIdx >= FileBuffer->getBufferSize())
+  if (StrTabIdx >= FileBuffer.getBufferSize())
     return None;
 
-  const char *Data = FileBuffer->getBufferStart() + StrTabIdx;
-  unsigned MaxLen = FileBuffer->getBufferSize() - StrTabIdx;
+  const char *Data = FileBuffer.getBufferStart() + StrTabIdx;
+  unsigned MaxLen = FileBuffer.getBufferSize() - StrTabIdx;
   unsigned Len = strnlen(Data, MaxLen);
 
   // Check whether the buffer is null-terminated.

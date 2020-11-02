@@ -9,9 +9,10 @@
 #ifndef LLVM_CLANG_SERIALIZATION_INMEMORYMODULECACHE_H
 #define LLVM_CLANG_SERIALIZATION_INMEMORYMODULECACHE_H
 
+#include "clang/Basic/FileEntry.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/Optional.h"
-#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <memory>
 
@@ -29,77 +30,54 @@ namespace clang {
 /// each \a ModuleManager sees the same files.
 class InMemoryModuleCache : public llvm::RefCountedBase<InMemoryModuleCache> {
   struct PCM {
-    std::unique_ptr<llvm::MemoryBuffer> Buffer;
-
     /// Track whether this PCM is known to be good (either built or
     /// successfully imported by a CompilerInstance/ASTReader using this
     /// cache).
     bool IsFinal = false;
 
+    /// Track whether this PCM is known to be bad (attempted to, but failed, to
+    /// load).
+    bool HasFailed = false;
+
     PCM() = default;
-    PCM(std::unique_ptr<llvm::MemoryBuffer> Buffer)
-        : Buffer(std::move(Buffer)) {}
   };
 
-  /// Cache of buffers.
-  llvm::StringMap<PCM> PCMs;
+  /// Cache of buffer state.
+  llvm::DenseMap<const FileEntry *, PCM> PCMs;
 
 public:
-  /// There are four states for a PCM.  It must monotonically increase.
+  /// Remember that a load attempt has failed.
   ///
-  ///  1. Unknown: the PCM has neither been read from disk nor built.
-  ///  2. Tentative: the PCM has been read from disk but not yet imported or
-  ///     built.  It might work.
-  ///  3. ToBuild: the PCM read from disk did not work but a new one has not
-  ///     been built yet.
-  ///  4. Final: indicating that the current PCM was either built in this
-  ///     process or has been successfully imported.
-  enum State { Unknown, Tentative, ToBuild, Final };
+  /// \post shouldLoadPCM() returns false unless/until finalizePCM() is called.
+  void rememberFailedLoad(FileEntryRef File) {
+    auto &PCM = PCMs[File];
+    if (!PCM.IsFinal)
+      PCM.HasFailed = true;
+  }
 
-  /// Get the state of the PCM.
-  State getPCMState(llvm::StringRef Filename) const;
-
-  /// Store the PCM under the Filename.
+  /// Mark a PCM as fully loaded, past the point of unloading it and building a
+  /// new one ourselves.
   ///
-  /// \pre state is Unknown
-  /// \post state is Tentative
-  /// \return a reference to the buffer as a convenience.
-  llvm::MemoryBuffer &addPCM(llvm::StringRef Filename,
-                             std::unique_ptr<llvm::MemoryBuffer> Buffer);
-
-  /// Store a just-built PCM under the Filename.
-  ///
-  /// \pre state is Unknown or ToBuild.
-  /// \pre state is not Tentative.
-  /// \return a reference to the buffer as a convenience.
-  llvm::MemoryBuffer &addBuiltPCM(llvm::StringRef Filename,
-                                  std::unique_ptr<llvm::MemoryBuffer> Buffer);
-
-  /// Try to remove a buffer from the cache.  No effect if state is Final.
-  ///
-  /// \pre state is Tentative/Final.
-  /// \post Tentative => ToBuild or Final => Final.
-  /// \return false on success, i.e. if Tentative => ToBuild.
-  bool tryToDropPCM(llvm::StringRef Filename);
-
-  /// Mark a PCM as final.
-  ///
-  /// \pre state is Tentative or Final.
-  /// \post state is Final.
-  void finalizePCM(llvm::StringRef Filename);
-
-  /// Get a pointer to the pCM if it exists; else nullptr.
-  llvm::MemoryBuffer *lookupPCM(llvm::StringRef Filename) const;
+  /// \post calls to shouldLoadPCM() and isPCMFinal() return true.
+  void finalizePCM(FileEntryRef File) {
+    auto &PCM = PCMs[File];
+    PCM.IsFinal = true;
+    PCM.HasFailed = false;
+  }
 
   /// Check whether the PCM is final and has been shown to work.
   ///
   /// \return true iff state is Final.
-  bool isPCMFinal(llvm::StringRef Filename) const;
+  bool isPCMFinal(FileEntryRef File) const { return PCMs.lookup(File).IsFinal; }
 
-  /// Check whether the PCM is waiting to be built.
+  /// Check whether the PCM should be loaded, either because it has been
+  /// finalized or we don't know anything.
   ///
-  /// \return true iff state is ToBuild.
-  bool shouldBuildPCM(llvm::StringRef Filename) const;
+  /// \post if state is Unknown, change to Tentative.
+  /// \return true iff state is not ToBuild.
+  bool shouldLoadPCM(FileEntryRef File) const {
+    return !PCMs.lookup(File).HasFailed;
+  }
 };
 
 } // end namespace clang

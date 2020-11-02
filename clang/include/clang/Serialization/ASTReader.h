@@ -1946,10 +1946,6 @@ public:
   /// Dump information about the AST reader to standard error.
   void dump();
 
-  /// Return the amount of memory used by memory buffers, breaking down
-  /// by heap-backed versus mmap'ed memory.
-  void getMemoryBufferSizes(MemoryBufferSizes &sizes) const override;
-
   /// Initialize the semantic source with the Sema instance
   /// being used to perform semantic analysis on the abstract syntax
   /// tree.

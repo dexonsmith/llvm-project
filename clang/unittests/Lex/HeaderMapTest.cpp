@@ -42,11 +42,10 @@ template <unsigned NumBuckets, unsigned NumBytes> struct MapFile {
     Header.StringsOffset = getSwappedBytes(Header.StringsOffset);
   }
 
-  std::unique_ptr<const MemoryBuffer> getBuffer() const {
-    return MemoryBuffer::getMemBuffer(
+  MemoryBufferRef getBuffer() const {
+    return MemoryBufferRef(
         StringRef(reinterpret_cast<const char *>(this), sizeof(MapFile)),
-        "header",
-        /* RequresNullTerminator */ false);
+        "header");
   }
 };
 
@@ -102,7 +101,7 @@ TEST(HeaderMapTest, checkHeaderMagic) {
   File.init();
   File.Header.Magic = 0;
   bool NeedsSwap;
-  ASSERT_FALSE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_FALSE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
 }
 
 TEST(HeaderMapTest, checkHeaderReserved) {
@@ -110,7 +109,7 @@ TEST(HeaderMapTest, checkHeaderReserved) {
   File.init();
   File.Header.Reserved = 1;
   bool NeedsSwap;
-  ASSERT_FALSE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_FALSE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
 }
 
 TEST(HeaderMapTest, checkHeaderVersion) {
@@ -118,18 +117,18 @@ TEST(HeaderMapTest, checkHeaderVersion) {
   File.init();
   ++File.Header.Version;
   bool NeedsSwap;
-  ASSERT_FALSE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_FALSE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
 }
 
 TEST(HeaderMapTest, checkHeaderValidButEmpty) {
   MapFile<1, 1> File;
   File.init();
   bool NeedsSwap;
-  ASSERT_TRUE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_TRUE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
   ASSERT_FALSE(NeedsSwap);
 
   File.swapBytes();
-  ASSERT_TRUE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_TRUE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
   ASSERT_TRUE(NeedsSwap);
 }
 
@@ -139,7 +138,7 @@ TEST(HeaderMapTest, checkHeader3Buckets) {
 
   File.init();
   bool NeedsSwap;
-  ASSERT_FALSE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_FALSE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
 }
 
 TEST(HeaderMapTest, checkHeader0Buckets) {
@@ -148,7 +147,7 @@ TEST(HeaderMapTest, checkHeader0Buckets) {
   File.init();
   File.Header.NumBuckets = 0;
   bool NeedsSwap;
-  ASSERT_FALSE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_FALSE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
 }
 
 TEST(HeaderMapTest, checkHeaderNotEnoughBuckets) {
@@ -156,7 +155,7 @@ TEST(HeaderMapTest, checkHeaderNotEnoughBuckets) {
   File.init();
   File.Header.NumBuckets = 8;
   bool NeedsSwap;
-  ASSERT_FALSE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_FALSE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
 }
 
 TEST(HeaderMapTest, lookupFilename) {
@@ -171,7 +170,7 @@ TEST(HeaderMapTest, lookupFilename) {
   Maker.addBucket(getHash("a"), a, b, c);
 
   bool NeedsSwap;
-  ASSERT_TRUE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_TRUE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
   ASSERT_FALSE(NeedsSwap);
   HeaderMapImpl Map(File.getBuffer(), NeedsSwap);
 
@@ -209,7 +208,7 @@ TEST(HeaderMapTest, lookupFilenameTruncatedSuffix) {
   Padding = 0xffffffff; // Padding won't stop it either.
 
   bool NeedsSwap;
-  ASSERT_TRUE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_TRUE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
   ASSERT_FALSE(NeedsSwap);
   HeaderMapImpl Map(File.getBuffer(), NeedsSwap);
 
@@ -244,7 +243,7 @@ TEST(HeaderMapTest, lookupFilenameTruncatedPrefix) {
   Padding = 0xffffffff; // Padding won't stop it either.
 
   bool NeedsSwap;
-  ASSERT_TRUE(HeaderMapImpl::checkHeader(*File.getBuffer(), NeedsSwap));
+  ASSERT_TRUE(HeaderMapImpl::checkHeader(File.getBuffer(), NeedsSwap));
   ASSERT_FALSE(NeedsSwap);
   HeaderMapImpl Map(File.getBuffer(), NeedsSwap);
 

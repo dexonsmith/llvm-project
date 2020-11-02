@@ -8712,15 +8712,15 @@ CXTUResourceUsage clang_getCXTUResourceUsage(CXTranslationUnit TU) {
       (unsigned long)astContext.getSourceManager().getContentCacheSize());
 
   // How much memory is being used by the MemoryBuffer's in SourceManager?
-  const SourceManager::MemoryBufferSizes &srcBufs =
-      astUnit->getSourceManager().getMemoryBufferSizes();
+  const FileManager::MemoryBufferSizes &fileBufs =
+      astUnit->getFileManager().getMemoryBufferSizes();
 
   createCXTUResourceUsageEntry(*entries,
                                CXTUResourceUsage_SourceManager_Membuffer_Malloc,
-                               (unsigned long)srcBufs.malloc_bytes);
+                               (unsigned long)fileBufs.malloc_bytes);
   createCXTUResourceUsageEntry(*entries,
                                CXTUResourceUsage_SourceManager_Membuffer_MMap,
-                               (unsigned long)srcBufs.mmap_bytes);
+                               (unsigned long)fileBufs.mmap_bytes);
   createCXTUResourceUsageEntry(
       *entries, CXTUResourceUsage_SourceManager_DataStructures,
       (unsigned long)astContext.getSourceManager().getDataStructureSizes());

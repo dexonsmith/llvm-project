@@ -445,6 +445,35 @@ FileEntryRef FileManager::getVirtualFileRef(StringRef Filename, off_t Size,
   return FileEntryRef(NamedFileEnt);
 }
 
+FileEntryRef FileManager::getVirtualFileWithContent(
+    StringRef Filename, std::unique_ptr<llvm::MemoryBuffer> Buffer,
+    time_t ModificationTime) {
+  FileEntryRef File =
+      getVirtualFileRef(Filename, Buffer->getBufferSize(), ModificationTime);
+  const_cast<FileEntry &>(File.getFileEntry()).Content = std::move(Buffer);
+  return File;
+}
+
+FileEntryRef FileManager::getRedirectedVirtualFile(
+    StringRef Filename, const FileEntry &FE) {
+  addAncestorsAsVirtualDirs(Filename);
+  auto DirInfo = expectedToOptional(
+      getDirectoryFromFile(*this, Filename, /*CacheFailure=*/true));
+  assert(DirInfo &&
+         "The directory of a virtual file should already be in the cache.");
+  auto &Alias =
+      *SeenFileEntries
+           .insert({Filename, FileEntryRef::MapValue(
+                                  const_cast<FileEntry &>(FE), *DirInfo)})
+           .first;
+  assert(Alias.second->V.is<FileEntry *>() &&
+         "filename redirected to a non-canonical filename?");
+  assert(Alias.second->V.get<FileEntry *>() == &FE &&
+         "filename from getStatValue() refers to wrong file");
+
+  return FileEntryRef(Alias);
+}
+
 llvm::Optional<FileEntryRef> FileManager::getBypassFile(FileEntryRef VF) {
   // Stat of the file and return nullptr if it doesn't exist.
   llvm::vfs::Status Status;
@@ -475,6 +504,20 @@ llvm::Optional<FileEntryRef> FileManager::getBypassFile(FileEntryRef VF) {
 
   // Save the entry in the bypass table and return.
   return FileEntryRef(*Insertion.first);
+}
+
+void FileManager::cleanUpAnonymousFiles(const void *ContextID) { }
+
+const FileEntry &FileManager::getAnonymousFileWithContent(
+    const void *ContextID, std::unique_ptr<llvm::MemoryBuffer> Content) {
+  AnonymousFileEntries.push_back(std::make_unique<FileEntry>());
+  auto &FE = *AnonymousFileEntries.back();
+  FE.Size = Content->getBufferSize();
+  FE.ModTime = 0;
+  FE.Content = std::move(Content);
+  FE.UID = NextFileUID++;
+  FE.IsValid = false; // ?
+  return FE;
 }
 
 bool FileManager::FixupRelativePath(SmallVectorImpl<char> &path) const {
@@ -512,9 +555,14 @@ void FileManager::fillRealPathName(FileEntry *UFE, llvm::StringRef FileName) {
   UFE->RealPathName = std::string(AbsPath.str());
 }
 
-llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
+llvm::ErrorOr<llvm::MemoryBufferRef>
 FileManager::getBufferForFile(const FileEntry *Entry, bool isVolatile,
                               bool RequiresNullTerminator) {
+  if (auto Buffer = Entry->getCachedContent())
+    return *Buffer;
+  else if (auto Error = Buffer.getError())
+    return Error;
+
   uint64_t FileSize = Entry->getSize();
   // If there's a high enough chance that the file have changed since we
   // got its size, force a stat before opening it.
@@ -524,15 +572,16 @@ FileManager::getBufferForFile(const FileEntry *Entry, bool isVolatile,
   StringRef Filename = Entry->getName();
   // If the file is already open, use the open file descriptor.
   if (Entry->File) {
-    auto Result = Entry->File->getBuffer(Filename, FileSize,
-                                         RequiresNullTerminator, isVolatile);
+    Entry->Content = Entry->File->getBuffer(Filename, FileSize,
+                                            RequiresNullTerminator, isVolatile);
     Entry->closeFile();
-    return Result;
+    return Entry->getCachedContent();
   }
 
   // Otherwise, open the file.
-  return getBufferForFileImpl(Filename, FileSize, isVolatile,
-                              RequiresNullTerminator);
+  Entry->Content = getBufferForFileImpl(Filename, FileSize, isVolatile,
+                                        RequiresNullTerminator);
+  return Entry->getCachedContent();
 }
 
 llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
@@ -634,6 +683,41 @@ StringRef FileManager::getCanonicalName(const FileEntry *File) {
 
   CanonicalNames.insert({File, CanonicalName});
   return CanonicalName;
+}
+
+FileManager::MemoryBufferSizes FileManager::getMemoryBufferSizes() const {
+  size_t malloc_bytes = 0;
+  size_t mmap_bytes = 0;
+
+
+  auto addBuffer = [&](const FileEntry &FE) {
+    if (!FE.Content || !*FE.Content)
+      return;
+    const llvm::MemoryBuffer &B = **FE.Content;
+    auto Size = B.getBufferSize();
+    switch (B.getBufferKind()) {
+    case llvm::MemoryBuffer::MemoryBuffer_MMap:
+      mmap_bytes += Size;
+      break;
+    case llvm::MemoryBuffer::MemoryBuffer_Malloc:
+      malloc_bytes += Size;
+      break;
+    }
+  };
+
+  for (auto &I : UniqueRealFiles)
+    addBuffer(I.second);
+
+  for (auto &I : VirtualFileEntries)
+    addBuffer(*I);
+
+  for (auto &I : BypassFileEntries)
+    addBuffer(*I);
+
+  for (auto &I : AnonymousFileEntries)
+    addBuffer(*I);
+
+  return MemoryBufferSizes(malloc_bytes, mmap_bytes);
 }
 
 void FileManager::PrintStats() const {

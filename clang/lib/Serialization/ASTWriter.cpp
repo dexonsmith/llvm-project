@@ -4384,18 +4384,28 @@ ASTFileSignature ASTWriter::WriteAST(Sema &SemaRef,
   this->WritingModule = WritingModule;
   ASTFileSignature Signature =
       WriteASTCore(SemaRef, isysroot, OutputFile, WritingModule);
+  if (ShouldCacheASTInMemory) {
+    SmallString<128> File;
+    File.append(OutputFile);
+    bool NeedsAlias = PreparePathForOutput(File);
+    // Construct MemoryBuffer and update buffer manager.
+    auto &FM = SemaRef.getSourceManager().getFileManager();
+    FileEntryRef FE = FM.getVirtualFileWithContent(
+        OutputFile,
+        llvm::MemoryBuffer::getMemBufferCopy(
+            StringRef(Buffer.begin(), Buffer.size())),
+        0);
+    if (NeedsAlias)
+      (void)FM.getRedirectedVirtualFile(File, FE.getFileEntry());
+
+    ModuleCache.finalizePCM(FE);
+  }
   Context = nullptr;
   PP = nullptr;
   this->WritingModule = nullptr;
-  this->BaseDirectory.clear();
 
   WritingAST = false;
-  if (ShouldCacheASTInMemory) {
-    // Construct MemoryBuffer and update buffer manager.
-    ModuleCache.addBuiltPCM(OutputFile,
-                            llvm::MemoryBuffer::getMemBufferCopy(
-                                StringRef(Buffer.begin(), Buffer.size())));
-  }
+  this->BaseDirectory.clear();
   return Signature;
 }
 

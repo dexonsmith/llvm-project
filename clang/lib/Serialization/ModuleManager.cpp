@@ -122,12 +122,21 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
   }
   // Note: ExpectedSize and ExpectedModTime will be 0 for MK_ImplicitModule
   // when using an ASTFileSignature.
-  if (lookupModuleFile(FileName, ExpectedSize, ExpectedModTime, Entry)) {
+  if (FileName == "-") {
+    // Create a FileEntry for stdin and store a buffer there.
+    if (auto Buffer = llvm::MemoryBuffer::getSTDIN()) {
+      Entry =
+          FileMgr.getVirtualFileWithContent(FileName, std::move(*Buffer), 0);
+    } else {
+      ErrorStr =  Buffer.getError().message();
+      return Missing;
+    }
+  } else if (lookupModuleFile(FileName, ExpectedSize, ExpectedModTime, Entry)) {
     ErrorStr = "module file out of date";
     return OutOfDate;
   }
 
-  if (!Entry && FileName != "-") {
+  if (!Entry) {
     ErrorStr = "module file not found";
     return Missing;
   }
@@ -183,47 +192,31 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
           llvm::sys::toTimeT(Status.getLastModificationTime());
   }
 
-  // Load the contents of the module
-  if (std::unique_ptr<llvm::MemoryBuffer> Buffer = lookupBuffer(FileName)) {
-    // The buffer was already provided for us.
-    NewModule->Buffer = &ModuleCache->addBuiltPCM(FileName, std::move(Buffer));
-    // Since the cached buffer is reused, it is safe to close the file
-    // descriptor that was opened while stat()ing the PCM in
-    // lookupModuleFile() above, it won't be needed any longer.
-    Entry->closeFile();
-  } else if (llvm::MemoryBuffer *Buffer =
-                 getModuleCache().lookupPCM(FileName)) {
-    NewModule->Buffer = Buffer;
-    // As above, the file descriptor is no longer needed.
-    Entry->closeFile();
-  } else if (getModuleCache().shouldBuildPCM(FileName)) {
+  // Check if this PCM has been rejected.
+  if (!ModuleCache->shouldLoadPCM(*NewModule->File)) {
     // Report that the module is out of date, since we tried (and failed) to
     // import it earlier.
     Entry->closeFile();
     return OutOfDate;
+  }
+
+  // Load the contents of the module.
+  //
+  // Get a buffer of the file and close the file descriptor when done.
+  // The file is volatile because in a parallel build we expect multiple
+  // compiler processes to use the same module file rebuilding it if needed.
+  //
+  // RequiresNullTerminator is false because module files don't need it, and
+  // this allows the file to still be mmapped.
+  if (auto ContentOrErr =
+          FileMgr.getBufferForFile(*NewModule->File, /*IsVolatile=*/true,
+                                   /*RequiresNullTerminator=*/false)) {
+    NewModule->File->closeFile();
+    NewModule->Buffer = *ContentOrErr;
   } else {
-    // Open the AST file.
-    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> Buf((std::error_code()));
-    if (FileName == "-") {
-      Buf = llvm::MemoryBuffer::getSTDIN();
-    } else {
-      // Get a buffer of the file and close the file descriptor when done.
-      // The file is volatile because in a parallel build we expect multiple
-      // compiler processes to use the same module file rebuilding it if needed.
-      //
-      // RequiresNullTerminator is false because module files don't need it, and
-      // this allows the file to still be mmapped.
-      Buf = FileMgr.getBufferForFile(NewModule->File,
-                                     /*IsVolatile=*/true,
-                                     /*RequiresNullTerminator=*/false);
-    }
-
-    if (!Buf) {
-      ErrorStr = Buf.getError().message();
-      return Missing;
-    }
-
-    NewModule->Buffer = &getModuleCache().addPCM(FileName, std::move(*Buf));
+    NewModule->File->closeFile();
+    ErrorStr = ContentOrErr.getError().message();
+    return Missing;
   }
 
   // Initialize the stream.
@@ -300,9 +293,8 @@ void ModuleManager::removeModules(ModuleIterator First, ModuleMap *modMap) {
 void
 ModuleManager::addInMemoryBuffer(StringRef FileName,
                                  std::unique_ptr<llvm::MemoryBuffer> Buffer) {
-  const FileEntry *Entry =
-      FileMgr.getVirtualFile(FileName, Buffer->getBufferSize(), 0);
-  InMemoryBuffers[Entry] = std::move(Buffer);
+  ModuleCache->finalizePCM(
+      FileMgr.getVirtualFileWithContent(FileName, std::move(Buffer), 0));
 }
 
 ModuleManager::VisitState *ModuleManager::allocateVisitState() {

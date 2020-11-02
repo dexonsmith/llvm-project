@@ -17,7 +17,7 @@
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/MemoryBufferRef.h"
 #include <memory>
 
 namespace clang {
@@ -27,15 +27,16 @@ struct HMapHeader;
 
 /// Implementation for \a HeaderMap that doesn't depend on \a FileManager.
 class HeaderMapImpl {
-  std::unique_ptr<const llvm::MemoryBuffer> FileBuffer;
+  llvm::MemoryBufferRef FileBuffer;
   bool NeedsBSwap;
 
 public:
-  HeaderMapImpl(std::unique_ptr<const llvm::MemoryBuffer> File, bool NeedsBSwap)
+  HeaderMapImpl(llvm::MemoryBufferRef File, bool NeedsBSwap)
       : FileBuffer(std::move(File)), NeedsBSwap(NeedsBSwap) {}
 
   // Check for a valid header and extract the byte swap.
-  static bool checkHeader(const llvm::MemoryBuffer &File, bool &NeedsByteSwap);
+  static bool checkHeader(const llvm::MemoryBufferRef &File,
+                          bool &NeedsByteSwap);
 
   /// If the specified relative filename is located in this HeaderMap return
   /// the filename it is mapped to, otherwise return an empty StringRef.
@@ -63,8 +64,8 @@ private:
 /// symlinks to files.  Its advantages are that it is dense and more efficient
 /// to create and process than a directory of symlinks.
 class HeaderMap : private HeaderMapImpl {
-  HeaderMap(std::unique_ptr<const llvm::MemoryBuffer> File, bool BSwap)
-      : HeaderMapImpl(std::move(File), BSwap) {}
+  HeaderMap(llvm::MemoryBufferRef File, bool BSwap)
+      : HeaderMapImpl(File, BSwap) {}
 
 public:
   /// This attempts to load the specified file as a header map.  If it doesn't

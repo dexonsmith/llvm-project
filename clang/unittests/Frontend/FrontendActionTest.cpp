@@ -10,6 +10,7 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/LangStandard.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
@@ -284,12 +285,15 @@ TEST(GeneratePCHFrontendAction, CacheGeneratedPCH) {
     ASSERT_TRUE(Compiler.ExecuteAction(TestAction));
 
     // Check whether the PCH was cached.
-    if (ShouldCache)
-      EXPECT_EQ(InMemoryModuleCache::Final,
-                Compiler.getModuleCache().getPCMState(PCHFilename));
-    else
-      EXPECT_EQ(InMemoryModuleCache::Unknown,
-                Compiler.getModuleCache().getPCMState(PCHFilename));
+    Optional<FileEntryRef> File =
+        expectedToOptional(Compiler.getFileManager().getFileRef(PCHFilename));
+    ASSERT_TRUE(File);
+    if (ShouldCache) {
+      EXPECT_TRUE(Compiler.getModuleCache().isPCMFinal(*File));
+      continue;
+    }
+    EXPECT_FALSE(Compiler.getModuleCache().isPCMFinal(*File));
+    EXPECT_TRUE(Compiler.getModuleCache().shouldLoadPCM(*File));
   }
 }
 

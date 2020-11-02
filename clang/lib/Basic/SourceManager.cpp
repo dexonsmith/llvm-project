@@ -52,19 +52,8 @@ using llvm::MemoryBuffer;
 /// getSizeBytesMapped - Returns the number of bytes actually mapped for this
 /// ContentCache. This can be 0 if the MemBuffer was not actually expanded.
 unsigned ContentCache::getSizeBytesMapped() const {
+  auto Buffer = getBufferIfLoaded();
   return Buffer ? Buffer->getBufferSize() : 0;
-}
-
-/// Returns the kind of memory used to back the memory buffer for
-/// this content cache.  This is used for performance analysis.
-llvm::MemoryBuffer::BufferKind ContentCache::getMemoryBufferKind() const {
-  assert(Buffer);
-
-  // Should be unreachable, but keep for sanity.
-  if (!Buffer)
-    return llvm::MemoryBuffer::MemoryBuffer_Malloc;
-
-  return Buffer->getBufferKind();
 }
 
 /// getSize - Returns the size of the content encapsulated by this ContentCache.
@@ -72,6 +61,7 @@ llvm::MemoryBuffer::BufferKind ContentCache::getMemoryBufferKind() const {
 ///  scratch buffer.  If the ContentCache encapsulates a source file, that
 ///  file is not lazily brought in from disk to satisfy this query.
 unsigned ContentCache::getSize() const {
+  auto Buffer = getBufferIfLoaded();
   return Buffer ? (unsigned)Buffer->getBufferSize()
                 : (unsigned)ContentsEntry->getSize();
 }
@@ -102,14 +92,24 @@ const char *ContentCache::getInvalidBOM(StringRef BufStr) {
 llvm::Optional<llvm::MemoryBufferRef>
 ContentCache::getBufferOrNone(DiagnosticsEngine &Diag, FileManager &FM,
                               SourceLocation Loc) const {
+  if (WriteableBuffer)
+    return WriteableBuffer->getMemBufferRef();
+
   // Lazily create the Buffer for ContentCaches that wrap files.  If we already
   // computed it, just return what we have.
   if (IsBufferInvalid)
     return None;
-  if (Buffer)
-    return Buffer->getMemBufferRef();
   if (!ContentsEntry)
     return None;
+
+  // Return the cached buffer if it has been validatd by the source manager.
+  if (auto Buffer = ContentsEntry->getCachedContent())
+    if (IsBufferValid)
+      return *Buffer;
+
+  // If the buffer has been validated, we should have been able to return it
+  // from the cache in ContentsEntry.
+  assert(!IsBufferValid && "Buffer validated but not cached?");
 
   // Start with the assumption that the buffer is invalid to simplify early
   // return paths.
@@ -132,6 +132,7 @@ ContentCache::getBufferOrNone(DiagnosticsEngine &Diag, FileManager &FM,
     return None;
   }
 
+  // This should prime the cache in ContentsEntry.
   auto BufferOrError = FM.getBufferForFile(ContentsEntry, IsFileVolatile);
 
   // If we were unable to open the file, then we are in an inconsistent
@@ -151,11 +152,11 @@ ContentCache::getBufferOrNone(DiagnosticsEngine &Diag, FileManager &FM,
     return None;
   }
 
-  Buffer = std::move(*BufferOrError);
+  llvm::MemoryBufferRef Buffer = *BufferOrError;
 
   // Check that the file's size is the same as in the file entry (which may
   // have come from a stat cache).
-  if (Buffer->getBufferSize() != (size_t)ContentsEntry->getSize()) {
+  if (Buffer.getBufferSize() != (size_t)ContentsEntry->getSize()) {
     if (Diag.isDiagnosticInFlight())
       Diag.SetDelayedDiagnostic(diag::err_file_modified,
                                 ContentsEntry->getName());
@@ -169,7 +170,7 @@ ContentCache::getBufferOrNone(DiagnosticsEngine &Diag, FileManager &FM,
   // If the buffer is valid, check to see if it has a UTF Byte Order Mark
   // (BOM).  We only support UTF-8 with and without a BOM right now.  See
   // http://en.wikipedia.org/wiki/Byte_order_mark for more information.
-  StringRef BufStr = Buffer->getBuffer();
+  StringRef BufStr = Buffer.getBuffer();
   const char *InvalidBOM = getInvalidBOM(BufStr);
 
   if (InvalidBOM) {
@@ -180,7 +181,8 @@ ContentCache::getBufferOrNone(DiagnosticsEngine &Diag, FileManager &FM,
 
   // Buffer has been validated.
   IsBufferInvalid = false;
-  return Buffer->getMemBufferRef();
+  IsBufferValid = true;
+  return Buffer;
 }
 
 unsigned LineTableInfo::getLineTableFilenameID(StringRef Name) {
@@ -325,6 +327,7 @@ SourceManager::~SourceManager() {
       ContentCacheAlloc.Deallocate(I->second);
     }
   }
+  getFileManager().cleanUpAnonymousFiles(this);
 }
 
 void SourceManager::clearIDTables() {
@@ -362,7 +365,6 @@ void SourceManager::initializeForReplay(const SourceManager &Old) {
     Clone->BufferOverridden = Cache->BufferOverridden;
     Clone->IsFileVolatile = Cache->IsFileVolatile;
     Clone->IsTransient = Cache->IsTransient;
-    Clone->setUnownedBuffer(Cache->getBufferIfLoaded());
     return Clone;
   };
 
@@ -421,7 +423,7 @@ ContentCache &SourceManager::createMemBufferContentCache(
   ContentCache *Entry = ContentCacheAlloc.Allocate<ContentCache>();
   new (Entry) ContentCache();
   MemBufferInfos.push_back(Entry);
-  Entry->setBuffer(std::move(Buffer));
+  Entry->WriteableBuffer = std::move(Buffer);
   return *Entry;
 }
 
@@ -462,11 +464,7 @@ SourceManager::AllocateLoadedSLocEntries(unsigned NumSLocEntries,
 /// As part of recovering from missing or changed content, produce a
 /// fake, non-empty buffer.
 llvm::MemoryBufferRef SourceManager::getFakeBufferForRecovery() const {
-  if (!FakeBufferForRecovery)
-    FakeBufferForRecovery =
-        llvm::MemoryBuffer::getMemBuffer("<<<INVALID BUFFER>>");
-
-  return *FakeBufferForRecovery;
+  return *getFakeContentCacheForRecovery().getBufferIfLoaded();
 }
 
 /// As part of recovering from missing or changed content, produce a
@@ -474,7 +472,9 @@ llvm::MemoryBufferRef SourceManager::getFakeBufferForRecovery() const {
 SrcMgr::ContentCache &SourceManager::getFakeContentCacheForRecovery() const {
   if (!FakeContentCacheForRecovery) {
     FakeContentCacheForRecovery = std::make_unique<SrcMgr::ContentCache>();
-    FakeContentCacheForRecovery->setUnownedBuffer(getFakeBufferForRecovery());
+    FakeContentCacheForRecovery->ContentsEntry =
+        &getFileManager().getAnonymousFileWithContent(
+            this, llvm::MemoryBuffer::getMemBuffer("<<<INVALID BUFFER>>"));
   }
   return *FakeContentCacheForRecovery;
 }
@@ -681,7 +681,10 @@ void SourceManager::overrideFileContents(
     const FileEntry *SourceFile, std::unique_ptr<llvm::MemoryBuffer> Buffer) {
   SrcMgr::ContentCache &IR = getOrCreateContentCache(SourceFile);
 
-  IR.setBuffer(std::move(Buffer));
+  //IR.setBuffer(std::move(Buffer));
+  //IR.ContentsEntry =
+  //    &getFileManager().getAnonymousFileWithContent(this, std::move(Buffer));
+  IR.WriteableBuffer = std::move(Buffer);
   IR.BufferOverridden = true;
 
   getOverriddenFilesInfo().OverriddenFilesWithBuffer.insert(SourceFile);
@@ -2153,26 +2156,6 @@ LLVM_DUMP_METHOD void SourceManager::dump() const {
 }
 
 ExternalSLocEntrySource::~ExternalSLocEntrySource() = default;
-
-/// Return the amount of memory used by memory buffers, breaking down
-/// by heap-backed versus mmap'ed memory.
-SourceManager::MemoryBufferSizes SourceManager::getMemoryBufferSizes() const {
-  size_t malloc_bytes = 0;
-  size_t mmap_bytes = 0;
-
-  for (unsigned i = 0, e = MemBufferInfos.size(); i != e; ++i)
-    if (size_t sized_mapped = MemBufferInfos[i]->getSizeBytesMapped())
-      switch (MemBufferInfos[i]->getMemoryBufferKind()) {
-        case llvm::MemoryBuffer::MemoryBuffer_MMap:
-          mmap_bytes += sized_mapped;
-          break;
-        case llvm::MemoryBuffer::MemoryBuffer_Malloc:
-          malloc_bytes += sized_mapped;
-          break;
-      }
-
-  return MemoryBufferSizes(malloc_bytes, mmap_bytes);
-}
 
 size_t SourceManager::getDataStructureSizes() const {
   size_t size = llvm::capacity_in_bytes(MemBufferInfos)

@@ -537,7 +537,7 @@ llvm::Error GlobalModuleIndexBuilder::loadModuleFile(const FileEntry *File) {
                                    "failed getting buffer for module file");
 
   // Initialize the input stream
-  llvm::BitstreamCursor InStream(PCHContainerRdr.ExtractPCH(**Buffer));
+  llvm::BitstreamCursor InStream(PCHContainerRdr.ExtractPCH(*Buffer));
 
   // Sniff for the signature.
   for (unsigned char C : {'C', 'P', 'C', 'H'})

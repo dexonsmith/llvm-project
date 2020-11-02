@@ -16,8 +16,18 @@
 
 using namespace clang;
 
-FileEntry::FileEntry() : UniqueID(0, 0), IsNamedPipe(false), IsValid(false) {}
+FileEntry::FileEntry()
+    : UniqueID(0, 0), IsNamedPipe(false), IsValid(false),
+      Content(std::error_code()) {}
 
 FileEntry::~FileEntry() = default;
 
 void FileEntry::closeFile() const { File.reset(); }
+
+// void FileEntry::loadBuffer() const {
+// 
+// }
+
+void FileEntry::overrideContent(std::unique_ptr<llvm::MemoryBuffer> Buffer) {
+  Content = std::move(Buffer);
+}

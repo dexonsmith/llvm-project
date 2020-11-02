@@ -2379,7 +2379,7 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
           return ModificationType::ModTime;
         }
 
-        auto ContentHash = hash_value(MemBuffOrError.get()->getBuffer());
+        auto ContentHash = hash_value(MemBuffOrError->getBuffer());
         if (StoredContentHash == static_cast<uint64_t>(ContentHash))
           return ModificationType::None;
         return ModificationType::Content;
@@ -4530,15 +4530,15 @@ ASTReader::ReadASTCore(StringRef FileName,
 
   assert(M && "Missing module file");
 
+  ModuleFile &F = *M;
   bool ShouldFinalizePCM = false;
   auto FinalizeOrDropPCM = llvm::make_scope_exit([&]() {
     auto &MC = getModuleManager().getModuleCache();
     if (ShouldFinalizePCM)
-      MC.finalizePCM(FileName);
+      MC.finalizePCM(*F.File);
     else
-      MC.tryToDropPCM(FileName);
+      MC.rememberFailedLoad(*F.File);
   });
-  ModuleFile &F = *M;
   BitstreamCursor &Stream = F.Stream;
   Stream = BitstreamCursor(PCHContainerRdr.ExtractPCH(*F.Buffer));
   F.SizeInBits = F.Buffer->getBufferSize() * 8;
@@ -4673,7 +4673,7 @@ ASTReader::readUnhashedControlBlock(ModuleFile &F, bool WasImportedBy,
     // validation will fail during the as-system import since the PCM on disk
     // doesn't guarantee that -Werror was respected.  However, the -Werror
     // flags were checked during the initial as-user import.
-    if (getModuleManager().getModuleCache().isPCMFinal(F.FileName)) {
+    if (getModuleManager().getModuleCache().isPCMFinal(*F.File)) {
       Diag(diag::warn_module_system_bit_conflict) << F.FileName;
       return Success;
     }
@@ -7807,24 +7807,6 @@ LLVM_DUMP_METHOD void ASTReader::dump() {
   llvm::errs() << "\n*** PCH/Modules Loaded:";
   for (ModuleFile &M : ModuleMgr)
     M.dump();
-}
-
-/// Return the amount of memory used by memory buffers, breaking down
-/// by heap-backed versus mmap'ed memory.
-void ASTReader::getMemoryBufferSizes(MemoryBufferSizes &sizes) const {
-  for (ModuleFile &I : ModuleMgr) {
-    if (llvm::MemoryBuffer *buf = I.Buffer) {
-      size_t bytes = buf->getBufferSize();
-      switch (buf->getBufferKind()) {
-        case llvm::MemoryBuffer::MemoryBuffer_Malloc:
-          sizes.malloc_bytes += bytes;
-          break;
-        case llvm::MemoryBuffer::MemoryBuffer_MMap:
-          sizes.mmap_bytes += bytes;
-          break;
-      }
-    }
-  }
 }
 
 void ASTReader::InitializeSema(Sema &S) {

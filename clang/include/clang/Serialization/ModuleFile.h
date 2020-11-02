@@ -180,9 +180,8 @@ public:
   /// The generation of which this module file is a part.
   unsigned Generation;
 
-  /// The memory buffer that stores the data associated with
-  /// this AST file, owned by the InMemoryModuleCache.
-  llvm::MemoryBuffer *Buffer;
+  /// The memory buffer that stores the data associated with this AST file.
+  Optional<llvm::MemoryBufferRef> Buffer;
 
   /// The size of this file, in bits.
   uint64_t SizeInBits = 0;
