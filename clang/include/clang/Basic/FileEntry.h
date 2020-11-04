@@ -275,6 +275,8 @@ static_assert(
 /// descriptor for the file.
 class FileEntry {
   friend class FileManager;
+  friend struct FileMgr::EntryByUniqueID<FileEntry>;
+  using ByUniqueID = FileMgr::EntryByUniqueID<FileEntry>;
 
   std::string RealPathName;   // Real path to the file; could be empty.
   off_t Size;                 // File size in bytes.

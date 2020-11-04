@@ -18,6 +18,7 @@
 #include "clang/Basic/FileEntry.h"
 #include "clang/Basic/FileSystemOptions.h"
 #include "clang/Basic/LLVM.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -55,18 +56,18 @@ class FileManager : public RefCountedBase<FileManager> {
   FileSystemOptions FileSystemOpts;
 
   /// Cache for existing real directories.
-  std::map<llvm::sys::fs::UniqueID, DirectoryEntry> UniqueRealDirs;
+  llvm::DenseSet<DirectoryEntry *, DirectoryEntry::ByUniqueID> UniqueRealDirs;
 
   /// Cache for existing real files.
-  std::map<llvm::sys::fs::UniqueID, FileEntry> UniqueRealFiles;
+  llvm::DenseSet<FileEntry *, FileEntry::ByUniqueID> UniqueRealFiles;
 
-  /// The virtual directories that we have allocated.
+  /// The directories that we have allocated.
   ///
   /// For each virtual file (e.g. foo/bar/baz.cpp), we add all of its parent
   /// directories (foo/ and foo/bar/) here.
-  SmallVector<std::unique_ptr<DirectoryEntry>, 4> VirtualDirectoryEntries;
+  SmallVector<std::unique_ptr<DirectoryEntry>, 4> DirectoryEntries;
   /// The virtual files that we have allocated.
-  SmallVector<std::unique_ptr<FileEntry>, 4> VirtualFileEntries;
+  SmallVector<std::unique_ptr<FileEntry>, 4> FileEntries;
 
   /// A set of files that bypass the maps and uniquing.  They can have
   /// conflicting filenames.
@@ -122,6 +123,8 @@ class FileManager : public RefCountedBase<FileManager> {
 
   /// Fills the RealPathName in file entry.
   void fillRealPathName(FileEntry *UFE, llvm::StringRef FileName);
+
+  FileEntry &getFileByUniqueID(const llvm::sys::fs::UniqueID &ID);
 
 public:
   /// Construct a file manager, optionally with a custom VFS.

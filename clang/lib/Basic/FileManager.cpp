@@ -108,7 +108,7 @@ void FileManager::addAncestorsAsVirtualDirs(StringRef Path) {
   auto UDE = std::make_unique<DirectoryEntry>();
   UDE->Name = NamedDirEnt.first();
   NamedDirEnt.second = *UDE.get();
-  VirtualDirectoryEntries.push_back(std::move(UDE));
+  DirectoryEntries.push_back(std::move(UDE));
 
   // Recursively add the other ancestors.
   addAncestorsAsVirtualDirs(DirName);
@@ -172,15 +172,18 @@ FileManager::getDirectoryRef(StringRef DirName, bool CacheFailure) {
   // same inode (this occurs on Unix-like systems when one dir is
   // symlinked to another, for example) or the same path (on
   // Windows).
-  DirectoryEntry &UDE = UniqueRealDirs[Status.getUniqueID()];
+  auto UDE = UniqueRealDirs.find_as(Status.getUniqueID());
+  if (UDE == UniqueRealDirs.end()) {
+    // We don't have this directory yet, add it.
+    DirectoryEntries.push_back(std::make_unique<DirectoryEntry>());
+    DirectoryEntries.back()->UniqueID = Status.getUniqueID();
+    UDE = UniqueRealDirs.insert(DirectoryEntries.back().get()).first;
 
-  NamedDirEnt.second = UDE;
-  if (UDE.getName().empty()) {
-    // We don't have this directory yet, add it.  We use the string
-    // key from the SeenDirEntries map as the string.
-    UDE.Name  = InterndDirName;
+    // We use the string key from the SeenDirEntries map as the string.
+    (*UDE)->Name  = InterndDirName;
   }
 
+  NamedDirEnt.second = **UDE;
   return DirectoryEntryRef(NamedDirEnt);
 }
 
@@ -268,7 +271,7 @@ FileManager::getFileRef(StringRef Filename, bool openFile, bool CacheFailure) {
 
   // It exists.  See if we have already opened a file with the same inode.
   // This occurs when one dir is symlinked to another, for example.
-  FileEntry &UFE = UniqueRealFiles[Status.getUniqueID()];
+  FileEntry &UFE = getFileByUniqueID(Status.getUniqueID());
 
   if (Status.getName() == Filename) {
     // The name matches. Set the FileEntry.
@@ -323,7 +326,6 @@ FileManager::getFileRef(StringRef Filename, bool openFile, bool CacheFailure) {
   UFE.ModTime = llvm::sys::toTimeT(Status.getLastModificationTime());
   UFE.Dir     = &DirInfo.getDirEntry();
   UFE.UID     = NextFileUID++;
-  UFE.UniqueID = Status.getUniqueID();
   UFE.IsNamedPipe = Status.getType() == llvm::sys::fs::file_type::fifo_file;
   UFE.File = std::move(F);
   UFE.IsValid = true;
@@ -336,6 +338,18 @@ FileManager::getFileRef(StringRef Filename, bool openFile, bool CacheFailure) {
     fillRealPathName(&UFE, InterndFileName);
   }
   return ReturnedRef;
+}
+
+FileEntry &FileManager::getFileByUniqueID(const llvm::sys::fs::UniqueID &ID) {
+  auto I = UniqueRealFiles.find_as(ID);
+  if (I != UniqueRealFiles.end())
+    return **I;
+
+  // We don't have this file yet.
+  FileEntries.push_back(std::make_unique<FileEntry>());
+  FileEntries.back()->UniqueID = ID;
+  (void)UniqueRealFiles.insert(FileEntries.back().get()).first;
+  return *FileEntries.back();
 }
 
 const FileEntry *FileManager::getVirtualFile(StringRef Filename, off_t Size,
@@ -375,7 +389,7 @@ FileEntryRef FileManager::getVirtualFileRef(StringRef Filename, off_t Size,
   llvm::vfs::Status Status;
   const char *InterndFileName = NamedFileEnt.first().data();
   if (!getStatValue(InterndFileName, Status, true, nullptr)) {
-    UFE = &UniqueRealFiles[Status.getUniqueID()];
+    UFE = &getFileByUniqueID(Status.getUniqueID());
     Status = llvm::vfs::Status(
       Status.getName(), Status.getUniqueID(),
       llvm::sys::toTimePoint(ModificationTime),
@@ -397,12 +411,11 @@ FileEntryRef FileManager::getVirtualFileRef(StringRef Filename, off_t Size,
     if (UFE->isValid())
       return FileEntryRef(NamedFileEnt);
 
-    UFE->UniqueID = Status.getUniqueID();
     UFE->IsNamedPipe = Status.getType() == llvm::sys::fs::file_type::fifo_file;
     fillRealPathName(UFE, Status.getName());
   } else {
-    VirtualFileEntries.push_back(std::make_unique<FileEntry>());
-    UFE = VirtualFileEntries.back().get();
+    FileEntries.push_back(std::make_unique<FileEntry>());
+    UFE = FileEntries.back().get();
     NamedFileEnt.second = FileEntryRef::MapValue(*UFE, *DirInfo);
   }
 
@@ -571,7 +584,7 @@ void FileManager::GetUniqueIDMapping(
     }
 
   // Map virtual file entries
-  for (const auto &VFE : VirtualFileEntries)
+  for (const auto &VFE : FileEntries)
     UIDToFiles[VFE->getUID()] = VFE.get();
 }
 
@@ -611,8 +624,10 @@ void FileManager::PrintStats() const {
   llvm::errs() << "\n*** File Manager Stats:\n";
   llvm::errs() << UniqueRealFiles.size() << " real files found, "
                << UniqueRealDirs.size() << " real dirs found.\n";
-  llvm::errs() << VirtualFileEntries.size() << " virtual files found, "
-               << VirtualDirectoryEntries.size() << " virtual dirs found.\n";
+  llvm::errs() << (FileEntries.size() - UniqueRealFiles.size())
+               << " virtual files found, "
+               << (DirectoryEntries.size() - UniqueRealDirs.size())
+               << " virtual dirs found.\n";
   llvm::errs() << NumDirLookups << " dir lookups, "
                << NumDirCacheMisses << " dir cache misses.\n";
   llvm::errs() << NumFileLookups << " file lookups, "

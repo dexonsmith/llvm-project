@@ -15,14 +15,47 @@
 #define LLVM_CLANG_BASIC_DIRECTORYENTRY_H
 
 #include "clang/Basic/LLVM.h"
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/FileSystem/UniqueID.h"
 
 namespace clang {
 namespace FileMgr {
 
 template <class RefTy> class MapEntryOptionalStorage;
+
+template <class EntryTy> struct EntryByUniqueID {
+  static EntryTy *getEmptyKey() {
+    return llvm::DenseMapInfo<EntryTy *>::getEmptyKey();
+  }
+  static EntryTy *getTombstoneKey() {
+    return llvm::DenseMapInfo<EntryTy *>::getTombstoneKey();
+  }
+  static unsigned getHashValue(const EntryTy *Entry) {
+    assert(Entry);
+    assert(Entry != getEmptyKey());
+    assert(Entry != getTombstoneKey());
+    return getHashValue(Entry->UniqueID);
+  }
+  static unsigned getHashValue(const llvm::sys::fs::UniqueID &ID) {
+    return llvm::DenseMapInfo<std::pair<uint64_t, uint64_t>>::getHashValue(
+        std::make_pair(ID.getDevice(), ID.getFile()));
+  }
+  static bool isEqual(const EntryTy *LHS, const EntryTy *RHS) {
+    if (LHS == RHS)
+      return true;
+    if (LHS == getTombstoneKey() || LHS == getEmptyKey())
+      return false;
+    return EntryByUniqueID::isEqual(LHS->UniqueID, RHS);
+  }
+  static bool isEqual(const llvm::sys::fs::UniqueID &LHS, const EntryTy *RHS) {
+    if (RHS == getTombstoneKey() || RHS == getEmptyKey())
+      return false;
+    return LHS == RHS->UniqueID;
+  }
+};
 
 } // end namespace FileMgr
 
@@ -30,9 +63,12 @@ template <class RefTy> class MapEntryOptionalStorage;
 /// the virtual file system).
 class DirectoryEntry {
   friend class FileManager;
+  friend struct FileMgr::EntryByUniqueID<DirectoryEntry>;
+  using ByUniqueID = FileMgr::EntryByUniqueID<DirectoryEntry>;
 
   // FIXME: We should not be storing a directory entry name here.
   StringRef Name; // Name of the directory.
+  llvm::sys::fs::UniqueID UniqueID; // Only used for uniquing.
 
 public:
   StringRef getName() const { return Name; }
