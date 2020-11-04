@@ -1546,7 +1546,7 @@ bool ASTReader::ReadSLocEntry(int ID) {
       auto Buffer = ReadBuffer(SLocEntryCursor, File->getName());
       if (!Buffer)
         return true;
-      SourceMgr.overrideFileContents(File, std::move(Buffer));
+      FileMgr.overrideFileContent(*File, std::move(Buffer));
     }
 
     break;
