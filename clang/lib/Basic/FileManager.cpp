@@ -104,14 +104,30 @@ void FileManager::addAncestorsAsVirtualDirs(StringRef Path) {
   if (NamedDirEnt.second)
     return;
 
+  DirectoryEntryRef::MapEntry *AbsNamedDirEnt = nullptr;
+  if (!llvm::sys::path::is_absolute(Path)) {
+    SmallString<128> AbsPath;
+    AbsPath.assign(Path);
+    makeAbsolutePath(AbsPath);
+    StringRef AbsDirName = llvm::sys::path::parent_path(AbsPath);
+    AbsNamedDirEnt =
+        &*SeenDirEntries
+              .insert({AbsDirName, std::errc::no_such_file_or_directory})
+              .first;
+
+    if (AbsNamedDirEnt->second) {
+      NamedDirEnt.second = AbsNamedDirEnt->second;
+      return;
+    }
+  }
+
   // Add the virtual directory to the cache.
   auto UDE = std::make_unique<DirectoryEntry>();
   UDE->Name = NamedDirEnt.first();
   NamedDirEnt.second = *UDE.get();
+  if (AbsNamedDirEnt)
+    AbsNamedDirEnt->second = *UDE.get();
   DirectoryEntries.push_back(std::move(UDE));
-
-  // Recursively add the other ancestors.
-  addAncestorsAsVirtualDirs(DirName);
 }
 
 llvm::Expected<DirectoryEntryRef>

@@ -129,7 +129,7 @@ TEST_F(FileManagerTest, NoVirtualDirectoryExistsBeforeAVirtualFileIsAdded) {
   ASSERT_FALSE(manager.getDirectory("virtual"));
 }
 
-// When a virtual file is added, all of its ancestors should be created.
+// When a virtual file is added, its ancestor should be created.
 TEST_F(FileManagerTest, getVirtualFileCreatesDirectoryEntriesForAncestors) {
   // Fake an empty real file system.
   manager.setStatCache(std::make_unique<FakeStatCache>());
@@ -141,9 +141,9 @@ TEST_F(FileManagerTest, getVirtualFileCreatesDirectoryEntriesForAncestors) {
   ASSERT_TRUE(dir);
   EXPECT_EQ("virtual/dir", (*dir)->getName());
 
+  // Only create one virtual directory.
   dir = manager.getDirectory("virtual");
-  ASSERT_TRUE(dir);
-  EXPECT_EQ("virtual", (*dir)->getName());
+  ASSERT_FALSE(dir);
 }
 
 // getFile() returns non-NULL if a real file exists at the given path.
