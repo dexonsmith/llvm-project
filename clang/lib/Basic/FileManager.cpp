@@ -705,10 +705,7 @@ FileManager::MemoryBufferSizes FileManager::getMemoryBufferSizes() const {
     }
   };
 
-  for (auto &I : UniqueRealFiles)
-    addBuffer(I.second);
-
-  for (auto &I : VirtualFileEntries)
+  for (auto &I : FileEntries)
     addBuffer(*I);
 
   for (auto &I : BypassFileEntries)
