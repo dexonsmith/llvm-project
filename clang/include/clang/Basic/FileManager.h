@@ -265,6 +265,9 @@ public:
   void overrideFileContent(const FileEntry &FE,
                            std::unique_ptr<llvm::MemoryBuffer> Buffer);
 
+  /// Redirect content of From to point at To.
+  void redirectFileContent(const FileEntry &From, const FileEntry &To);
+
   /// Make a new (virtual) FileEntry and override its content.
   FileEntryRef
   getVirtualFileWithContent(StringRef Filename,
@@ -282,7 +285,6 @@ public:
   /// Return the amount of memory used by memory buffers, breaking down
   /// by heap-backed versus mmap'ed memory.
   MemoryBufferSizes getMemoryBufferSizes() const;
-
 
   /// Make a new FileEntryRef called Filename that points at FE.
   FileEntryRef getVirtualFileRef(StringRef Filename, const FileEntry &FE);

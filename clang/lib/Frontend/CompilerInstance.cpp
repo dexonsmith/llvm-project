@@ -336,26 +336,16 @@ static void InitializeFileRemapping(DiagnosticsEngine &Diags,
                                     const PreprocessorOptions &InitOpts) {
   // Remap files in the source manager (with buffers).
   for (const auto &RB : InitOpts.RemappedFileBuffers) {
-    // Create the file entry for the file that we're mapping from.
-    const FileEntry *FromFile =
-        FileMgr.getVirtualFile(RB.first, RB.second->getBufferSize(), 0);
-    if (!FromFile) {
-      Diags.Report(diag::err_fe_remap_missing_from_file) << RB.first;
-      if (!InitOpts.RetainRemappedFileBuffers)
-        delete RB.second;
-      continue;
-    }
-
     // Override the contents of the "from" file with the contents of the
     // "to" file. If the caller owns the buffers, then pass a MemoryBufferRef;
     // otherwise, pass as a std::unique_ptr<MemoryBuffer> to transfer ownership
     // to the SourceManager.
+    std::unique_ptr<llvm::MemoryBuffer> Buffer;
     if (InitOpts.RetainRemappedFileBuffers)
-      SourceMgr.overrideFileContents(FromFile, RB.second->getMemBufferRef());
+      Buffer = llvm::MemoryBuffer::getMemBuffer(RB.second->getMemBufferRef());
     else
-      SourceMgr.overrideFileContents(
-          FromFile, std::unique_ptr<llvm::MemoryBuffer>(
-                        const_cast<llvm::MemoryBuffer *>(RB.second)));
+      Buffer.reset(RB.second);
+    (void)FileMgr.getVirtualFileWithContent(RB.first, std::move(Buffer), 0);
   }
 
   // Remap files in the source manager (with other files).
@@ -1222,20 +1212,14 @@ static bool compileModule(CompilerInstance &ImportingInstance,
     llvm::raw_string_ostream OS(InferredModuleMapContent);
     Module->print(OS);
     OS.flush();
+    (void)getFileManager().getVirtualFileWithContent(
+        FakeModuleMapFile,
+        llvm::MemoryBuffer::getMemBuffer(InferredModuleMapContent), 0);
 
     Result = compileModuleImpl(
         ImportingInstance, ImportLoc, Module->getTopLevelModuleName(),
         FrontendInputFile(FakeModuleMapFile, IK, +Module->IsSystem),
-        ModMap.getModuleMapFileForUniquing(Module)->getName(),
-        ModuleFileName,
-        [&](CompilerInstance &Instance) {
-      std::unique_ptr<llvm::MemoryBuffer> ModuleMapBuffer =
-          llvm::MemoryBuffer::getMemBuffer(InferredModuleMapContent);
-      ModuleMapFile = Instance.getFileManager().getVirtualFile(
-          FakeModuleMapFile, InferredModuleMapContent.size(), 0);
-      Instance.getSourceManager().overrideFileContents(
-          ModuleMapFile, std::move(ModuleMapBuffer));
-    });
+        ModMap.getModuleMapFileForUniquing(Module)->getName(), ModuleFileName);
   }
 
   // We've rebuilt a module. If we're allowed to generate or update the global
@@ -2059,15 +2043,13 @@ void CompilerInstance::createModuleFromSource(SourceLocation ImportLoc,
 
   std::string NullTerminatedSource(Source.str());
 
-  auto PreBuildStep = [&](CompilerInstance &Other) {
-    // Create a virtual file containing our desired source.
-    // FIXME: We shouldn't need to do this.
-    const FileEntry *ModuleMapFile = Other.getFileManager().getVirtualFile(
-        ModuleMapFileName, NullTerminatedSource.size(), 0);
-    Other.getSourceManager().overrideFileContents(
-        ModuleMapFile,
-        llvm::MemoryBuffer::getMemBuffer(NullTerminatedSource.c_str()));
+  // Create a virtual file containing our desired source.
+  // FIXME: We shouldn't need to do this.
+  (void)Other.getFileManager().getVirtualFileWithContent(
+      ModuleMapFileName,
+      llvm::MemoryBuffer::getMemBuffer(NullTerminatedSource.c_str()), 0);
 
+  auto PreBuildStep = [&](CompilerInstance &Other) {
     Other.BuiltModules = std::move(BuiltModules);
     Other.DeleteBuiltModules = false;
   };

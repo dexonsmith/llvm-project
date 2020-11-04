@@ -528,8 +528,6 @@ bool MigrationProcess::applyTransform(TransformFn trans,
       createInvocationForMigration(OrigCI, PCHContainerOps->getRawReader()));
   CInvok->getDiagnosticOpts().IgnoreWarnings = true;
 
-  Remapper.applyMappings(CInvok->getPreprocessorOpts());
-
   CapturedDiagList capturedDiags;
   std::vector<SourceLocation> ARCMTMacroLocs;
 
@@ -546,13 +544,14 @@ bool MigrationProcess::applyTransform(TransformFn trans,
   std::unique_ptr<ARCMTMacroTrackerAction> ASTAction;
   ASTAction.reset(new ARCMTMacroTrackerAction(ARCMTMacroLocs));
 
-  std::unique_ptr<ASTUnit> Unit(ASTUnit::LoadFromCompilerInvocationAction(
-      std::move(CInvok), PCHContainerOps, Diags, ASTAction.get()));
-  if (!Unit) {
+  std::unique_ptr<ASTUnit> Unit = ASTUnit::create(CInvok, Diags);
+  if (Remapper.applyMappings(Unit->getFileManager()) ||
+      !ASTUnit::LoadFromCompilerInvocationAction(std::move(CInvok),
+                                                 PCHContainerOps, Diags,
+                                                 ASTAction.get(), Unit.get())) {
     errRec.FinishCapture();
     return true;
   }
-  Unit->setOwnsRemappedFileBuffers(false); // FileRemapper manages that.
 
   HadARCErrors = HadARCErrors || capturedDiags.hasErrors();
 

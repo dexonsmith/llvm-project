@@ -255,17 +255,6 @@ ASTUnit::~ASTUnit() {
   }
 
   clearFileLevelDecls();
-
-  // Free the buffers associated with remapped files. We are required to
-  // perform this operation here because we explicitly request that the
-  // compiler instance *not* free these buffers for each invocation of the
-  // parser.
-  if (Invocation && OwnsRemappedFileBuffers) {
-    PreprocessorOptions &PPOpts = Invocation->getPreprocessorOpts();
-    for (const auto &RB : PPOpts.RemappedFileBuffers)
-      delete RB.second;
-  }
-
   ClearCachedCompletionResults();
 
   if (getenv("LIBCLANG_OBJTRACKING"))

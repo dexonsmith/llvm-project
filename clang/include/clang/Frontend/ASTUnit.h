@@ -158,9 +158,6 @@ private:
   /// Whether we should time each operation.
   bool WantTiming;
 
-  /// Whether the ASTUnit should delete the remapped buffers.
-  bool OwnsRemappedFileBuffers = true;
-
   /// Track the top-level decls which appeared in an ASTUnit which was loaded
   /// from a source file.
   //
@@ -488,9 +485,6 @@ public:
   ASTDeserializationListener *getDeserializationListener();
 
   bool getOnlyLocalDecls() const { return OnlyLocalDecls; }
-
-  bool getOwnsRemappedFileBuffers() const { return OwnsRemappedFileBuffers; }
-  void setOwnsRemappedFileBuffers(bool val) { OwnsRemappedFileBuffers = val; }
 
   StringRef getMainFileName() const;
 

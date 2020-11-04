@@ -54,7 +54,7 @@ public:
 
   void remap(StringRef filePath, std::unique_ptr<llvm::MemoryBuffer> memBuf);
 
-  void applyMappings(PreprocessorOptions &PPOpts) const;
+  bool applyMappings(FileManager &FM) const;
 
   /// Iterate through all the mappings.
   void forEachMapping(

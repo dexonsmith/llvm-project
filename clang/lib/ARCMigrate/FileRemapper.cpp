@@ -205,15 +205,24 @@ void FileRemapper::forEachMapping(
   }
 }
 
-void FileRemapper::applyMappings(PreprocessorOptions &PPOpts) const {
-  for (MappingsTy::const_iterator
-         I = FromToMappings.begin(), E = FromToMappings.end(); I != E; ++I) {
-    if (const FileEntry *FE = I->second.dyn_cast<const FileEntry *>()) {
-      PPOpts.addRemappedFile(I->first->getName(), FE->getName());
-    } else {
-      llvm::MemoryBuffer *mem = I->second.get<llvm::MemoryBuffer *>();
-      PPOpts.addRemappedFile(I->first->getName(), mem);
+bool FileRemapper::applyMappings(FileManager &FM) const {
+  for (auto &Mapping : FromToMappings) {
+    Optional<FileEntryRef> From =
+        FM.getOptionalFileRef(Mapping.first->getName());
+    if (!From)
+      return true;
+
+    if (auto *Buffer = Mapping.second.dyn_cast<llvm::MemoryBuffer *>()) {
+      FM.overrideFileContent(*From, Buffer->getMemBufferRef());
+      continue;
     }
+
+    Optional<FileEntryRef> To = FM.getOptionalFileRef(
+        Mapping.second.get<const FileEntry *>()->getName());
+    if (!To)
+      return true;
+
+    FM.redirectFileContent(From->getFileEntry(), To->getFileEntry());
   }
 
   PPOpts.RetainRemappedFileBuffers = true;
