@@ -249,8 +249,7 @@ scanPreamble(llvm::StringRef Contents, const tooling::CompileCommand &Cmd) {
   // This means we're scanning (though not preprocessing) the preamble section
   // twice. However, it's important to precisely follow the preamble bounds used
   // elsewhere.
-  auto Bounds =
-      ComputePreambleBounds(*CI->getLangOpts(), ContentsBuffer.get(), 0);
+  auto Bounds = ComputePreambleBounds(*CI->getLangOpts(), *ContentsBuffer, 0);
   auto PreambleContents =
       llvm::MemoryBuffer::getMemBufferCopy(Contents.substr(0, Bounds.Size));
   auto Clang = prepareCompilerInstance(
