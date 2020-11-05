@@ -142,7 +142,7 @@ SyntaxTreeTest::buildTree(StringRef Code, const TestClangConfig &ClangConfig) {
   CompilerInstance Compiler;
   Compiler.setInvocation(Invocation);
   Compiler.setDiagnostics(Diags.get());
-  Compiler.setFileManager(FileMgr.get());
+  Compiler.setFileManager(*FileMgr);
   Compiler.setSourceManager(SourceMgr.get());
 
   syntax::TranslationUnit *Root = nullptr;

@@ -55,7 +55,7 @@ public:
                      DiagnosticConsumer *DiagConsumer) override {
     CompilerInstance Compiler(std::move(PCHContainerOps));
     Compiler.setInvocation(std::move(Invocation));
-    Compiler.setFileManager(FileMgr);
+    Compiler.setFileManager(*FileMgr);
 
     Compiler.createDiagnostics(DiagConsumer, /*ShouldOwnClient=*/false);
     if (!Compiler.hasDiagnostics())

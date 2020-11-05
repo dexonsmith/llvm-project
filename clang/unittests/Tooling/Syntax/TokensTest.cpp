@@ -133,7 +133,7 @@ public:
     CompilerInstance Compiler;
     Compiler.setInvocation(std::move(CI));
     Compiler.setDiagnostics(Diags.get());
-    Compiler.setFileManager(FileMgr.get());
+    Compiler.setFileManager(*FileMgr);
     Compiler.setSourceManager(SourceMgr.get());
 
     this->Buffer = TokenBuffer(*SourceMgr);

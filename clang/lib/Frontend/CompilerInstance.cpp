@@ -101,8 +101,19 @@ llvm::vfs::FileSystem &CompilerInstance::getVirtualFileSystem() const {
   return getFileManager().getVirtualFileSystem();
 }
 
-void CompilerInstance::setFileManager(FileManager *Value) {
-  FileMgr = Value;
+void CompilerInstance::setFileManager(FileManager &Value) {
+  assert(!FileMgr && "FileManager already set");
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+  assert(!HadFileManager && "FileManager already set and destroyed");
+#endif
+  FileMgr = &Value;
+}
+
+void CompilerInstance::resetFileManager() {
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+  HadFileManager = true;
+#endif
+  FileMgr = nullptr;
 }
 
 void CompilerInstance::setSourceManager(SourceManager *Value) {
@@ -314,11 +325,9 @@ CompilerInstance::createDiagnostics(DiagnosticOptions *Opts,
 FileManager *CompilerInstance::createFileManager(
     IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
   if (!VFS)
-    VFS = FileMgr ? &FileMgr->getVirtualFileSystem()
-                  : createVFSFromCompilerInvocation(getInvocation(),
-                                                    getDiagnostics());
+    VFS = createVFSFromCompilerInvocation(getInvocation(), getDiagnostics());
   assert(VFS && "FileManager has no VFS?");
-  FileMgr = new FileManager(getFileSystemOpts(), std::move(VFS));
+  setFileManager(*new FileManager(getFileSystemOpts(), std::move(VFS)));
   return FileMgr.get();
 }
 
@@ -1144,7 +1153,7 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
 
   // Note that this module is part of the module build stack, so that we
   // can detect cycles in the module graph.
-  Instance.setFileManager(&ImportingInstance.getFileManager());
+  Instance.setFileManager(ImportingInstance.getFileManager());
   Instance.createSourceManager(Instance.getFileManager());
   SourceManager &SourceMgr = Instance.getSourceManager();
   SourceMgr.setModuleBuildStack(

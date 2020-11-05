@@ -573,10 +573,8 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     // FIXME: What if the input is a memory buffer?
     StringRef InputFile = Input.getFile();
 
-    std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFile(
-        std::string(InputFile), CI.getPCHContainerReader(),
-        ASTUnit::LoadPreprocessorOnly, ASTDiags, CI.getFileSystemOpts(),
-        CI.getCodeGenOpts().DebugTypeExtRefs);
+    std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFileForInstance(
+        CI, std::string(InputFile), ASTUnit::LoadPreprocessorOnly, ASTDiags);
     if (!AST)
       goto failure;
 
@@ -588,7 +586,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
     // Set the shared objects, these are reset when we finish processing the
     // file, otherwise the CompilerInstance will happily destroy them.
-    CI.setFileManager(&AST->getFileManager());
+    CI.setFileManager(AST->getFileManager());
     CI.createSourceManager(CI.getFileManager());
     CI.getSourceManager().initializeForReplay(AST->getSourceManager());
 
@@ -641,10 +639,8 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     // FIXME: What if the input is a memory buffer?
     StringRef InputFile = Input.getFile();
 
-    std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFile(
-        std::string(InputFile), CI.getPCHContainerReader(),
-        ASTUnit::LoadEverything, Diags, CI.getFileSystemOpts(),
-        CI.getCodeGenOpts().DebugTypeExtRefs);
+    std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFileForInstance(
+        CI, std::string(InputFile), ASTUnit::LoadEverything, Diags);
 
     if (!AST)
       goto failure;
@@ -655,7 +651,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
     // Set the shared objects, these are reset when we finish processing the
     // file, otherwise the CompilerInstance will happily destroy them.
-    CI.setFileManager(&AST->getFileManager());
+    CI.setFileManager(AST->getFileManager());
     CI.setSourceManager(&AST->getSourceManager());
     CI.setPreprocessor(AST->getPreprocessorPtr());
     Preprocessor &PP = CI.getPreprocessor();
@@ -1017,7 +1013,7 @@ void FrontendAction::EndSourceFile() {
     } else {
       CI.setPreprocessor(nullptr);
       CI.setSourceManager(nullptr);
-      CI.setFileManager(nullptr);
+      CI.resetFileManager();
     }
   }
 

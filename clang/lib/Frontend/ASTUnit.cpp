@@ -754,13 +754,27 @@ void ASTUnit::ConfigureDiags(IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
         CaptureDiagnostics != CaptureDiagsKind::AllWithoutNonErrorsFromIncludes));
 }
 
+std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFileForInstance(
+    const CompilerInstance &TargetCI, const std::string &Filename,
+    WhatToLoad ToLoad, IntrusiveRefCntPtr<DiagnosticsEngine> Diags) {
+  FileManager *FileMgr = nullptr;
+  if (TargetCI.hasFileManager())
+    FileMgr = &TargetCI.getFileManager();
+  return ASTUnit::LoadFromASTFile(
+      Filename, TargetCI.getPCHContainerReader(), ToLoad, Diags,
+      TargetCI.getFileSystemOpts(), TargetCI.getCodeGenOpts().DebugTypeExtRefs,
+      /*OnlyLocalDecls=*/false, None, CaptureDiagsKind::None,
+      /*AllowPCHWithCompilerErrors=*/false, /*UserFilesAreVolatile=*/false,
+      FileMgr);
+}
+
 std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
     const std::string &Filename, const PCHContainerReader &PCHContainerRdr,
     WhatToLoad ToLoad, IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
     const FileSystemOptions &FileSystemOpts, bool UseDebugInfo,
     bool OnlyLocalDecls, ArrayRef<RemappedFile> RemappedFiles,
     CaptureDiagsKind CaptureDiagnostics, bool AllowPCHWithCompilerErrors,
-    bool UserFilesAreVolatile) {
+    bool UserFilesAreVolatile, FileManager *FileMgr) {
   std::unique_ptr<ASTUnit> AST(new ASTUnit(true));
 
   // Recover resources if we crash before exiting this method.
@@ -776,9 +790,9 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
   AST->OnlyLocalDecls = OnlyLocalDecls;
   AST->CaptureDiagnostics = CaptureDiagnostics;
   AST->Diagnostics = Diags;
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-      llvm::vfs::getRealFileSystem();
-  AST->FileMgr = new FileManager(FileSystemOpts, VFS);
+  AST->FileMgr =
+      FileMgr ? FileMgr
+              : new FileManager(FileSystemOpts, llvm::vfs::getRealFileSystem());
   AST->UserFilesAreVolatile = UserFilesAreVolatile;
   AST->SourceMgr = new SourceManager(AST->getDiagnostics(),
                                      AST->getFileManager(),
@@ -1136,7 +1150,7 @@ bool ASTUnit::Parse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
   // changed above in AddImplicitPreamble.  If VFS is nullptr, rely on
   // createFileManager to create one.
   if (VFS && FileMgr && &FileMgr->getVirtualFileSystem() == VFS)
-    Clang->setFileManager(&*FileMgr);
+    Clang->setFileManager(*FileMgr);
   else
     FileMgr = Clang->createFileManager(std::move(VFS));
 
@@ -1456,7 +1470,7 @@ void ASTUnit::transferASTDataFromCompilerInstance(CompilerInstance &CI) {
   if (CI.hasPreprocessor())
     PP = CI.getPreprocessorPtr();
   CI.setSourceManager(nullptr);
-  CI.setFileManager(nullptr);
+  CI.resetFileManager();
   if (CI.hasTarget())
     Target = &CI.getTarget();
   Reader = CI.getASTReader();
@@ -1601,7 +1615,7 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
   AST->Reader = nullptr;
 
   // Create a file manager object to provide access to and cache the filesystem.
-  Clang->setFileManager(&AST->getFileManager());
+  Clang->setFileManager(AST->getFileManager());
 
   // Create the source manager.
   Clang->setSourceManager(&AST->getSourceManager());
@@ -2223,7 +2237,7 @@ void ASTUnit::CodeComplete(
          "IR inputs not support here!");
 
   // Use the source and file managers that we were given.
-  Clang->setFileManager(&FileMgr);
+  Clang->setFileManager(FileMgr);
   Clang->setSourceManager(&SourceMgr);
 
   // Remap files.

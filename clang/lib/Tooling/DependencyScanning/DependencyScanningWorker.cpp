@@ -119,7 +119,7 @@ public:
     }
 
     FileMgr->getFileSystemOpts().WorkingDir = std::string(WorkingDirectory);
-    Compiler.setFileManager(FileMgr);
+    Compiler.setFileManager(*FileMgr);
     Compiler.createSourceManager(*FileMgr);
 
     // Create the dependency collector that will collect the produced

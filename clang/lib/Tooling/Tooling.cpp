@@ -393,7 +393,7 @@ bool FrontendActionFactory::runInvocation(
   // Create a compiler instance to handle the actual work.
   CompilerInstance Compiler(std::move(PCHContainerOps));
   Compiler.setInvocation(std::move(Invocation));
-  Compiler.setFileManager(Files);
+  Compiler.setFileManager(*Files);
 
   // The FrontendAction can have lifetime requirements for Compiler or its
   // members, and we need to ensure it's deleted earlier than Compiler. So we

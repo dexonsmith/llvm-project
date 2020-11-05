@@ -695,7 +695,14 @@ public:
       bool OnlyLocalDecls = false, ArrayRef<RemappedFile> RemappedFiles = None,
       CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
       bool AllowPCHWithCompilerErrors = false,
-      bool UserFilesAreVolatile = false);
+      bool UserFilesAreVolatile = false, FileManager *FileMgr = nullptr);
+
+  /// Create a ASTUnit from an AST file for use in TargetCI. This is a wrapper
+  /// around LoadFromASTFile that pulls out options from TargetCI.
+  static std::unique_ptr<ASTUnit>
+  LoadFromASTFileForInstance(const CompilerInstance &TargetCI,
+                             const std::string &Filename, WhatToLoad ToLoad,
+                             IntrusiveRefCntPtr<DiagnosticsEngine> Diags);
 
 private:
   /// Helper function for \c LoadFromCompilerInvocation() and

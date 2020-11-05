@@ -151,6 +151,11 @@ class CompilerInstance : public ModuleLoader {
   /// One or more modules failed to build.
   bool ModuleBuildFailed = false;
 
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+  /// Whether the FileMgr has been set before.
+  bool HadFileManager = false;
+#endif
+
   /// The stream for verbose output if owned, otherwise nullptr.
   std::unique_ptr<raw_ostream> OwnedVerboseOutputStream;
 
@@ -410,7 +415,12 @@ public:
   }
 
   /// Replace the current file manager and virtual file system.
-  void setFileManager(FileManager *Value);
+  ///
+  /// \pre !hasFileManager()
+  void setFileManager(FileManager &Value);
+
+  /// Drop the file manager. This cannot be undone.
+  void resetFileManager();
 
   /// }
   /// @name Source Manager
