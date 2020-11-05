@@ -1470,7 +1470,6 @@ void ASTUnit::transferASTDataFromCompilerInstance(CompilerInstance &CI) {
   if (CI.hasPreprocessor())
     PP = CI.getPreprocessorPtr();
   CI.setSourceManager(nullptr);
-  CI.resetFileManager();
   if (CI.hasTarget())
     Target = &CI.getTarget();
   Reader = CI.getASTReader();

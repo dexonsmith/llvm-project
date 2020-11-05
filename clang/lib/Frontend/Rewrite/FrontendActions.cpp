@@ -140,7 +140,6 @@ bool FixItRecompile::BeginInvocation(CompilerInstance &CI) {
 
       FixAction->EndSourceFile();
       CI.setSourceManager(nullptr);
-      CI.resetFileManager();
     } else {
       err = true;
     }
