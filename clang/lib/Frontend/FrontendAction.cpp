@@ -1008,12 +1008,10 @@ void FrontendAction::EndSourceFile() {
     if (DisableFree) {
       CI.resetAndLeakPreprocessor();
       CI.resetAndLeakSourceManager();
-      CI.resetAndLeakFileManager();
       llvm::BuryPointer(std::move(CurrentASTUnit));
     } else {
       CI.setPreprocessor(nullptr);
       CI.setSourceManager(nullptr);
-      CI.resetFileManager();
     }
   }
 
