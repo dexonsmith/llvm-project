@@ -98,7 +98,7 @@ public:
       Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions, new LogDiagnosticPrinter(
             errs(), nullptr, nullptr)));
 
-    FileManager *FileMgr = new FileManager(FSOpts, VFS);
+    FileManager *FileMgr = createFileManagerFromCompilerInvocation(*CI, VFS).release();
 
     std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromCompilerInvocation(
         CI, PCHContainerOpts, Diags, FileMgr, false, CaptureDiagsKind::None,

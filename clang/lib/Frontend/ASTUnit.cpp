@@ -1492,12 +1492,10 @@ ASTUnit::create(std::shared_ptr<CompilerInvocation> CI,
                 bool UserFilesAreVolatile) {
   std::unique_ptr<ASTUnit> AST(new ASTUnit(false));
   ConfigureDiags(Diags, *AST, CaptureDiagnostics);
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-      createVFSFromCompilerInvocation(*CI, *Diags);
   AST->Diagnostics = Diags;
   AST->FileSystemOpts = CI->getFileSystemOpts();
   AST->Invocation = std::move(CI);
-  AST->FileMgr = new FileManager(AST->FileSystemOpts, VFS);
+  AST->FileMgr = createFileManagerFromCompilerInvocation(*CI, *Diags);
   AST->UserFilesAreVolatile = UserFilesAreVolatile;
   AST->SourceMgr = new SourceManager(AST->getDiagnostics(), *AST->FileMgr,
                                      UserFilesAreVolatile);
@@ -1785,7 +1783,7 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
   if (!VFS)
     VFS = llvm::vfs::getRealFileSystem();
   VFS = createVFSFromCompilerInvocation(*CI, *Diags, VFS);
-  AST->FileMgr = new FileManager(AST->FileSystemOpts, VFS);
+  AST->FileMgr = createFileManagerFromCompilerInvocation(*CI, VFS);
   AST->ModuleCache = new InMemoryModuleCache;
   AST->OnlyLocalDecls = OnlyLocalDecls;
   AST->CaptureDiagnostics = CaptureDiagnostics;
