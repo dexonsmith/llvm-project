@@ -46,6 +46,7 @@ class FileSystem;
 namespace clang {
 
 class DiagnosticsEngine;
+class FileManager;
 class HeaderSearchOptions;
 class PreprocessorOptions;
 class TargetOptions;
@@ -255,6 +256,14 @@ createVFSFromCompilerInvocation(const CompilerInvocation &CI,
 IntrusiveRefCntPtr<llvm::vfs::FileSystem> createVFSFromCompilerInvocation(
     const CompilerInvocation &CI, DiagnosticsEngine &Diags,
     IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS);
+
+IntrusiveRefCntPtr<FileManager>
+createFileManagerFromCompilerInvocation(const CompilerInvocation &CI,
+                                        DiagnosticsEngine &Diags);
+
+IntrusiveRefCntPtr<FileManager> createFileManagerFromCompilerInvocation(
+    const CompilerInvocation &CI,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS);
 
 } // namespace clang
 

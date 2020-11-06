@@ -36,6 +36,7 @@
 namespace llvm {
 
 class MemoryBuffer;
+class MemoryBufferRef;
 
 } // end namespace llvm
 
@@ -53,6 +54,10 @@ class FileSystemStatCache;
 class FileManager : public RefCountedBase<FileManager> {
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS;
   FileSystemOptions FileSystemOpts;
+
+  /// Handling for remapped file buffers.
+  IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFS;
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS;
 
   /// Cache for existing real directories.
   std::map<llvm::sys::fs::UniqueID, DirectoryEntry> UniqueRealDirs;
@@ -229,12 +234,26 @@ public:
   FileSystemOptions &getFileSystemOpts() { return FileSystemOpts; }
   const FileSystemOptions &getFileSystemOpts() const { return FileSystemOpts; }
 
-  llvm::vfs::FileSystem &getVirtualFileSystem() const { return *FS; }
-
-  void setVirtualFileSystem(IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS) {
-    this->FS = std::move(FS);
+  /// Get the underlying VFS, skipping files mapped to buffers.
+  llvm::vfs::FileSystem &getVirtualFileSystem() const {
+    return BaseFS ? *BaseFS : *FS;
   }
 
+  /// Reset the VFS. Drops any buffers mapped via mapFileToBuffer.
+  void setVirtualFileSystem(IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS);
+
+  /// Get the effective VFS, including files mapped to buffers.
+  llvm::vfs::FileSystem &getEffectiveVirtualFileSystem() const { return *FS; }
+
+  void mapFileToBuffer(StringRef Filename,
+                       std::unique_ptr<llvm::MemoryBuffer> Buffer);
+  void mapFileToBuffer(StringRef Filename, const llvm::MemoryBufferRef &Buffer);
+  void dropFilesMappedToBuffers();
+
+private:
+  void installInMemoryFileSystem();
+
+public:
   /// Retrieve a file entry for a "virtual" file that acts as
   /// if there were a file with the given name on disk.
   ///

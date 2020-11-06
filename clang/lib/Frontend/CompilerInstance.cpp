@@ -313,12 +313,22 @@ CompilerInstance::createDiagnostics(DiagnosticOptions *Opts,
 
 FileManager *CompilerInstance::createFileManager(
     IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
-  if (!VFS)
-    VFS = FileMgr ? &FileMgr->getVirtualFileSystem()
-                  : createVFSFromCompilerInvocation(getInvocation(),
+  // Use the VFS if provided.
+  if (VFS) {
+    FileMgr = createFileManagerFromCompilerInvocation(getInvocation(), VFS);
+    return FileMgr.get();
+  }
+
+  // Use the previous FileManager's VFS, if there is one.
+  if (FileMgr) {
+    FileMgr = createFileManagerFromCompilerInvocation(
+        getInvocation(), &FileMgr->getVirtualFileSystem());
+    return FileMgr.get();
+  }
+
+  // Let the FileManager make its own VFS.
+  FileMgr = createFileManagerFromCompilerInvocation(getInvocation(),
                                                     getDiagnostics());
-  assert(VFS && "FileManager has no VFS?");
-  FileMgr = new FileManager(getFileSystemOpts(), std::move(VFS));
   return FileMgr.get();
 }
 

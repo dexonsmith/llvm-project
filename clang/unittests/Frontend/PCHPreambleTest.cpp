@@ -19,6 +19,10 @@
 #include "llvm/Support/Path.h"
 #include "gtest/gtest.h"
 
+// FIXME: remove once tests pass.
+#include "clang/Frontend/LogDiagnosticPrinter.h"
+#include "llvm/Support/raw_ostream.h"
+
 using namespace llvm;
 using namespace clang;
 
@@ -91,7 +95,8 @@ public:
     PPOpts.RemappedFilesKeepOriginalName = true;
 
     IntrusiveRefCntPtr<DiagnosticsEngine>
-      Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions, new DiagnosticConsumer));
+      Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions, new LogDiagnosticPrinter(
+            errs(), nullptr, nullptr)));
 
     FileManager *FileMgr = new FileManager(FSOpts, VFS);
 

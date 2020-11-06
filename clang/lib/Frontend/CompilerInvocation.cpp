@@ -15,6 +15,7 @@
 #include "clang/Basic/DebugInfoOptions.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/FileSystemOptions.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
@@ -4079,9 +4080,10 @@ clang::createVFSFromCompilerInvocation(const CompilerInvocation &CI,
                                          llvm::vfs::getRealFileSystem());
 }
 
-static IntrusiveRefCntPtr<llvm::vfs::FileSystem>
-createVFSOverlayIfNeeded(const CompilerInvocation &CI, DiagnosticsEngine &Diags,
-                         IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
+IntrusiveRefCntPtr<llvm::vfs::FileSystem>
+clang::createVFSFromCompilerInvocation(
+    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
   if (CI.getHeaderSearchOpts().VFSOverlayFiles.empty())
     return BaseFS;
 
@@ -4108,77 +4110,33 @@ createVFSOverlayIfNeeded(const CompilerInvocation &CI, DiagnosticsEngine &Diags,
   return Result;
 }
 
-static IntrusiveRefCntPtr<llvm::vfs::FileSystem>
-createInMemoryFSIfNeeded(const CompilerInvocation &CI, DiagnosticsEngine &Diags,
-                         IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
+IntrusiveRefCntPtr<FileManager>
+clang::createFileManagerFromCompilerInvocation(const CompilerInvocation &CI,
+                                               DiagnosticsEngine &Diags) {
+  return createFileManagerFromCompilerInvocation(
+      CI, createVFSFromCompilerInvocation(CI, Diags));
+}
+
+IntrusiveRefCntPtr<FileManager>
+clang::createFileManagerFromCompilerInvocation(
+    const CompilerInvocation &CI,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
+  IntrusiveRefCntPtr<FileManager> FM =
+      new FileManager(CI.getFileSystemOpts(), std::move(VFS));
+
   const auto &PPOpts = CI.getPreprocessorOpts();
   if (PPOpts.RemappedFileBuffers.empty())
-    return BaseFS;
+    return FM;
 
-  // Create the file systems.
-  IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> OverlayFS =
-      new llvm::vfs::OverlayFileSystem(std::move(BaseFS));
-  IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFS =
-      new llvm::vfs::InMemoryFileSystem;
-  OverlayFS->pushOverlay(InMemoryFS);
-
-  // Set up computation of absolute paths.
-  Optional<SmallString<256>> AbsPath;
-  Optional<size_t> AbsPathLength;
-  bool AbsPathFailed = false;
-  auto computeAbsolutePath = [&](StringRef Filename) {
-    if (AbsPath) {
-      AbsPath->resize(*AbsPathLength);
-      llvm::sys::path::append(*AbsPath, Filename);
-      return false;
-    }
-
-    if (AbsPathFailed)
-      return true;
-
-    llvm::ErrorOr<std::string> WorkingDirectory =
-        OverlayFS->getCurrentWorkingDirectory();
-    if (!WorkingDirectory)
-      return AbsPathFailed = true;
-
-    AbsPath.emplace(*WorkingDirectory);
-    AbsPathLength = AbsPath->size();
-    llvm::sys::path::append(*AbsPath, Filename);
-    return false;
-  };
-
-  // Map the buffers.
+  // Pass mappings into the VFS in the FileManager.
   for (const auto &Mapping : PPOpts.RemappedFileBuffers) {
     std::unique_ptr<llvm::MemoryBuffer> Buffer;
     if (PPOpts.RetainRemappedFileBuffers)
-      Buffer =
-          llvm::MemoryBuffer::getMemBuffer(Mapping.second->getMemBufferRef());
+      FM->mapFileToBuffer(Mapping.first, Mapping.second->getMemBufferRef());
     else
-      Buffer.reset(Mapping.second);
-
-    StringRef Filename = Mapping.first;
-    if (llvm::sys::path::is_absolute(Filename)) {
-      InMemoryFS->addFile(Filename, 0, std::move(Buffer));
-      continue;
-    }
-
-    if (!computeAbsolutePath(Filename)) {
-      InMemoryFS->addFile(*AbsPath, 0, std::move(Buffer));
-      continue;
-    }
-
-    Diags.Report(diag::err_invalid_working_directory_for_remapped_file)
-        << Filename;
+      FM->mapFileToBuffer(Mapping.first,
+                          std::unique_ptr<llvm::MemoryBuffer>(Mapping.second));
   }
 
-  return OverlayFS;
-}
-
-IntrusiveRefCntPtr<llvm::vfs::FileSystem>
-clang::createVFSFromCompilerInvocation(
-    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
-  BaseFS = createVFSOverlayIfNeeded(CI, Diags, BaseFS);
-  BaseFS = createInMemoryFSIfNeeded(CI, Diags, BaseFS);
-  return BaseFS;
+  return FM;
 }

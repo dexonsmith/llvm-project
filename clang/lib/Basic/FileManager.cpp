@@ -614,3 +614,54 @@ void FileManager::PrintStats() const {
 
   //llvm::errs() << PagesMapped << BytesOfPagesMapped << FSLookups;
 }
+
+void FileManager::mapFileToBuffer(StringRef Filename,
+                                  const llvm::MemoryBufferRef &Buffer) {
+  mapFileToBuffer(Filename, llvm::MemoryBuffer::getMemBuffer(Buffer));
+}
+
+void FileManager::mapFileToBuffer(StringRef Filename,
+                                  std::unique_ptr<llvm::MemoryBuffer> Buffer) {
+  if (!InMemoryFS) {
+    InMemoryFS = new llvm::vfs::InMemoryFileSystem;
+    installInMemoryFileSystem();
+  }
+
+  if (llvm::sys::path::is_absolute(Filename)) {
+    InMemoryFS->addFile(Filename, 0, std::move(Buffer));
+    return;
+  }
+
+  SmallString<128> AbsPath(Filename);
+  makeAbsolutePath(AbsPath);
+  InMemoryFS->addFile(Filename, 0, std::move(Buffer));
+}
+
+void FileManager::dropFilesMappedToBuffers() {
+  if (!InMemoryFS)
+    return;
+
+  assert(BaseFS && "missing base VFS?");
+  FS = std::move(BaseFS);
+  InMemoryFS.reset();
+}
+
+void FileManager::setVirtualFileSystem(IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS) {
+  this->FS = std::move(FS);
+  if (!InMemoryFS)
+    return;
+
+  this->BaseFS.reset();
+  installInMemoryFileSystem();
+}
+
+void FileManager::installInMemoryFileSystem() {
+  assert(InMemoryFS && "Need an in-memory filesystem to overlay");
+  assert(!BaseFS && "Overlay already installed");
+
+  BaseFS = std::move(FS);
+  IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> OverlayFS =
+      new llvm::vfs::OverlayFileSystem(BaseFS);
+  OverlayFS->pushOverlay(InMemoryFS);
+  FS = std::move(OverlayFS);
+}
