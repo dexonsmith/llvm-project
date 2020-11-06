@@ -241,6 +241,9 @@ def err_missing_vfs_overlay_file : Error<
 def err_invalid_vfs_overlay : Error<
   "invalid virtual filesystem overlay file '%0'">, DefaultFatal;
 
+def err_invalid_working_directory_for_remapped_file : Error<
+  "invalid working directory for remapped file '%0'">, DefaultFatal;
+
 def warn_option_invalid_ocl_version : Warning<
   "OpenCL version %0 does not support the option '%1'">, InGroup<Deprecated>;
 

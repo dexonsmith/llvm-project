@@ -334,29 +334,7 @@ static void InitializeFileRemapping(DiagnosticsEngine &Diags,
                                     SourceManager &SourceMgr,
                                     FileManager &FileMgr,
                                     const PreprocessorOptions &InitOpts) {
-  // Remap files in the source manager (with buffers).
-  for (const auto &RB : InitOpts.RemappedFileBuffers) {
-    // Create the file entry for the file that we're mapping from.
-    const FileEntry *FromFile =
-        FileMgr.getVirtualFile(RB.first, RB.second->getBufferSize(), 0);
-    if (!FromFile) {
-      Diags.Report(diag::err_fe_remap_missing_from_file) << RB.first;
-      if (!InitOpts.RetainRemappedFileBuffers)
-        delete RB.second;
-      continue;
-    }
-
-    // Override the contents of the "from" file with the contents of the
-    // "to" file. If the caller owns the buffers, then pass a MemoryBufferRef;
-    // otherwise, pass as a std::unique_ptr<MemoryBuffer> to transfer ownership
-    // to the SourceManager.
-    if (InitOpts.RetainRemappedFileBuffers)
-      SourceMgr.overrideFileContents(FromFile, RB.second->getMemBufferRef());
-    else
-      SourceMgr.overrideFileContents(
-          FromFile, std::unique_ptr<llvm::MemoryBuffer>(
-                        const_cast<llvm::MemoryBuffer *>(RB.second)));
-  }
+  // Remapped files with buffers are already in the VFS.
 
   // Remap files in the source manager (with other files).
   for (const auto &RF : InitOpts.RemappedFiles) {
@@ -1121,9 +1099,6 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
   // Force implicitly-built modules to hash the content of the module file.
   HSOpts.ModulesHashContent = true;
   FrontendOpts.Inputs = {Input};
-
-  // Don't free the remapped file buffers; they are owned by our caller.
-  PPOpts.RetainRemappedFileBuffers = true;
 
   Invocation->getDiagnosticOpts().VerifyDiagnostics = 0;
   assert(ImportingInstance.getInvocation().getModuleHash() ==

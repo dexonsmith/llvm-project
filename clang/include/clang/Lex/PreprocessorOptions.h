@@ -225,10 +225,16 @@ public:
     ImplicitPCHInclude.clear();
     SingleFileParseMode = false;
     LexEditorPlaceholders = true;
-    RetainRemappedFileBuffers = true;
     PrecompiledPreambleBytes.first = 0;
     PrecompiledPreambleBytes.second = false;
     RetainExcludedConditionalBlocks = false;
+
+    // Caller is responsible for ensuring this PreprocessorOptions is a copy,
+    // and the buffers are not dropped on the floor.
+    //
+    // FIXME: Move RemappedFileBuffers to FileSystemOptions and handle this
+    // logic in the copy constructor.
+    RemappedFileBuffers.clear();
   }
 };
 
