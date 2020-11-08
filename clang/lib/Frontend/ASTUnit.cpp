@@ -1691,20 +1691,17 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
     std::shared_ptr<CompilerInvocation> CI,
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, FileManager *FileMgr,
-    bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
-    unsigned PrecompilePreambleAfterNParses, TranslationUnitKind TUKind,
-    bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
+    unsigned PrecompilePreambleAfterNParses,
     bool UserFilesAreVolatile) {
   // Create the AST unit.
   std::unique_ptr<ASTUnit> AST(new ASTUnit(false));
-  ConfigureDiags(Diags, *AST, CaptureDiagnostics);
+  ConfigureDiags(Diags, *AST, CaptureDiagsKind::None);
   AST->Diagnostics = Diags;
-  AST->OnlyLocalDecls = OnlyLocalDecls;
-  AST->CaptureDiagnostics = CaptureDiagnostics;
-  AST->TUKind = TUKind;
-  AST->ShouldCacheCodeCompletionResults = CacheCodeCompletionResults;
-  AST->IncludeBriefCommentsInCodeCompletion
-    = IncludeBriefCommentsInCodeCompletion;
+  AST->OnlyLocalDecls = false;
+  AST->CaptureDiagnostics = CaptureDiagsKind::None;
+  AST->TUKind = TU_Complete;
+  AST->ShouldCacheCodeCompletionResults = false;
+  AST->IncludeBriefCommentsInCodeCompletion = false;
   AST->Invocation = std::move(CI);
   AST->FileSystemOpts = FileMgr->getFileSystemOpts();
   AST->FileMgr = FileMgr;

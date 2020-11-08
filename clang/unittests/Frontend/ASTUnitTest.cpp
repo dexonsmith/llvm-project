@@ -52,9 +52,8 @@ protected:
         new FileManager(FileSystemOptions(), vfs::getRealFileSystem());
     PCHContainerOps = std::make_shared<PCHContainerOperations>();
 
-    return ASTUnit::LoadFromCompilerInvocation(
-        CInvok, PCHContainerOps, Diags, FileMgr, false, CaptureDiagsKind::None,
-        0, TU_Complete, false, false, isVolatile);
+    return ASTUnit::LoadFromCompilerInvocation(CInvok, PCHContainerOps, Diags,
+                                               FileMgr, 0, isVolatile);
   }
 };
 
@@ -139,9 +138,8 @@ TEST_F(ASTUnitTest, ModuleTextualHeader) {
   FileManager *FileMgr = new FileManager(FileSystemOptions(), InMemoryFs);
   PCHContainerOps = std::make_shared<PCHContainerOperations>();
 
-  auto AU = ASTUnit::LoadFromCompilerInvocation(
-      CInvok, PCHContainerOps, Diags, FileMgr, false, CaptureDiagsKind::None, 1,
-      TU_Complete, false, false, false);
+  auto AU = ASTUnit::LoadFromCompilerInvocation(CInvok, PCHContainerOps, Diags,
+                                                FileMgr, 1);
   ASSERT_TRUE(AU);
   auto File = AU->getFileManager().getFileRef("Textual.h", false, false);
   ASSERT_TRUE(bool(File));

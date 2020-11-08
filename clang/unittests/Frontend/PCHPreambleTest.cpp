@@ -96,7 +96,7 @@ public:
     FileManager *FileMgr = new FileManager(FSOpts, VFS);
 
     std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromCompilerInvocation(
-        CI, PCHContainerOpts, Diags, FileMgr, false, CaptureDiagsKind::None,
+        CI, PCHContainerOpts, Diags, FileMgr,
         /*PrecompilePreambleAfterNParses=*/1);
     return AST;
   }
