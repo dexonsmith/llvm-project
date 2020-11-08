@@ -1513,8 +1513,7 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
     ASTUnit *Unit, bool Persistent, StringRef ResourceFilesPath,
     bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
     unsigned PrecompilePreambleAfterNParses, bool CacheCodeCompletionResults,
-    bool IncludeBriefCommentsInCodeCompletion, bool UserFilesAreVolatile,
-    std::unique_ptr<ASTUnit> *ErrAST) {
+    bool UserFilesAreVolatile, std::unique_ptr<ASTUnit> *ErrAST) {
   assert(CI && "A CompilerInvocation is required");
 
   std::unique_ptr<ASTUnit> OwnAST;
@@ -1537,8 +1536,7 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
     AST->PreambleRebuildCountdown = PrecompilePreambleAfterNParses;
   AST->TUKind = Action ? Action->getTranslationUnitKind() : TU_Complete;
   AST->ShouldCacheCodeCompletionResults = CacheCodeCompletionResults;
-  AST->IncludeBriefCommentsInCodeCompletion
-    = IncludeBriefCommentsInCodeCompletion;
+  AST->IncludeBriefCommentsInCodeCompletion = false;
 
   // Recover resources if we crash before exiting this method.
   llvm::CrashRecoveryContextCleanupRegistrar<ASTUnit>
