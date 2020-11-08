@@ -93,15 +93,18 @@ public:
 
     PreprocessorOptions &PPOpts = CI->getPreprocessorOpts();
     PPOpts.RemappedFilesKeepOriginalName = true;
+    PPOpts.RetainRemappedFileBuffers = true;
 
     IntrusiveRefCntPtr<DiagnosticsEngine>
       Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions, new LogDiagnosticPrinter(
             errs(), nullptr, nullptr)));
 
-    FileManager *FileMgr = createFileManagerFromCompilerInvocation(*CI, VFS).release();
+    IntrusiveRefCntPtr<FileManager> FileMgr =
+        createFileManagerFromCompilerInvocation(*CI, VFS);
 
     std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromCompilerInvocation(
-        CI, PCHContainerOpts, Diags, FileMgr, false, CaptureDiagsKind::None,
+        CI, PCHContainerOpts, Diags, std::move(FileMgr), false,
+        CaptureDiagsKind::None,
         /*PrecompilePreambleAfterNParses=*/1);
     return AST;
   }

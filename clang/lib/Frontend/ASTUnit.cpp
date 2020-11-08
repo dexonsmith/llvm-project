@@ -1128,6 +1128,8 @@ bool ASTUnit::Parse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     NumStoredDiagnosticsFromDriver = 0;
   });
 
+  Clang->setInvocation(CCInvocation);
+
   // Ensure that Clang has a FileManager with the right VFS, which may have
   // changed above in AddImplicitPreamble.  If VFS is nullptr, rely on
   // createFileManager to create one.
@@ -1140,7 +1142,6 @@ bool ASTUnit::Parse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
   llvm::CrashRecoveryContextCleanupRegistrar<CompilerInstance>
     CICleanup(Clang.get());
 
-  Clang->setInvocation(CCInvocation);
   OriginalSourceFile =
       std::string(Clang->getFrontendOpts().Inputs[0].getFile());
 
@@ -1688,8 +1689,9 @@ bool ASTUnit::LoadFromCompilerInvocation(
 std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
     std::shared_ptr<CompilerInvocation> CI,
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-    IntrusiveRefCntPtr<DiagnosticsEngine> Diags, FileManager *FileMgr,
-    bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
+    IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
+    IntrusiveRefCntPtr<FileManager> FileMgr, bool OnlyLocalDecls,
+    CaptureDiagsKind CaptureDiagnostics,
     unsigned PrecompilePreambleAfterNParses, TranslationUnitKind TUKind,
     bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
     bool UserFilesAreVolatile) {
@@ -2220,11 +2222,14 @@ void ASTUnit::CodeComplete(
   Clang->setSourceManager(&SourceMgr);
 
   // Remap files.
+  FileMgr.dropFilesMappedToBuffers();
   PreprocessorOpts.clearRemappedFiles();
   PreprocessorOpts.RetainRemappedFileBuffers = true;
   for (const auto &RemappedFile : RemappedFiles) {
     PreprocessorOpts.addRemappedFile(RemappedFile.first, RemappedFile.second);
     OwnedBuffers.push_back(RemappedFile.second);
+    FileMgr.mapFileToBuffer(RemappedFile.first,
+                            RemappedFile.second->getMemBufferRef());
   }
 
   // Use the code completion consumer we were given, but adding any cached

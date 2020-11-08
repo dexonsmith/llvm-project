@@ -34,6 +34,9 @@
 #include <string>
 #include <utility>
 
+// FIXME: remove this.
+#include "llvm/Support/Signals.h"
+
 using namespace clang;
 
 #define DEBUG_TYPE "file-search"
@@ -52,6 +55,10 @@ FileManager::FileManager(const FileSystemOptions &FSO,
                          IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS)
     : FS(std::move(FS)), FileSystemOpts(FSO), SeenDirEntries(64),
       SeenFileEntries(64), NextFileUID(0) {
+  // FIXME: remove this.
+  llvm::errs() << "###### constructing a FileManager\n";
+  llvm::sys::PrintStackTrace(llvm::errs());
+
   // If the caller doesn't provide a virtual file system, just grab the real
   // file system.
   if (!this->FS)

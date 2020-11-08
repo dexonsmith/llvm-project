@@ -778,8 +778,8 @@ public:
   static std::unique_ptr<ASTUnit> LoadFromCompilerInvocation(
       std::shared_ptr<CompilerInvocation> CI,
       std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-      IntrusiveRefCntPtr<DiagnosticsEngine> Diags, FileManager *FileMgr,
-      bool OnlyLocalDecls = false,
+      IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
+      IntrusiveRefCntPtr<FileManager> FileMgr, bool OnlyLocalDecls = false,
       CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
       unsigned PrecompilePreambleAfterNParses = 0,
       TranslationUnitKind TUKind = TU_Complete,
