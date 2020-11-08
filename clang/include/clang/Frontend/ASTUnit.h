@@ -823,7 +823,6 @@ public:
       bool OnlyLocalDecls = false,
       CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
       ArrayRef<RemappedFile> RemappedFiles = None,
-      bool RemappedFilesKeepOriginalName = true,
       unsigned PrecompilePreambleAfterNParses = 0,
       TranslationUnitKind TUKind = TU_Complete,
       bool CacheCodeCompletionResults = false,
@@ -835,8 +834,7 @@ public:
       bool ForSerialization = false,
       bool RetainExcludedConditionalBlocks = false,
       llvm::Optional<StringRef> ModuleFormat = llvm::None,
-      std::unique_ptr<ASTUnit> *ErrAST = nullptr,
-      IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = nullptr);
+      std::unique_ptr<ASTUnit> *ErrAST = nullptr);
 
   /// Reparse the source files using the same command-line options that
   /// were originally used to produce this translation unit.

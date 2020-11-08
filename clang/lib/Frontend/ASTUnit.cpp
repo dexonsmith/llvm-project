@@ -1729,14 +1729,13 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, StringRef ResourceFilesPath,
     bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
-    ArrayRef<RemappedFile> RemappedFiles, bool RemappedFilesKeepOriginalName,
+    ArrayRef<RemappedFile> RemappedFiles,
     unsigned PrecompilePreambleAfterNParses, TranslationUnitKind TUKind,
     bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
     bool AllowPCHWithCompilerErrors, SkipFunctionBodiesScope SkipFunctionBodies,
     bool SingleFileParse, bool UserFilesAreVolatile, bool ForSerialization,
     bool RetainExcludedConditionalBlocks,
-    llvm::Optional<StringRef> ModuleFormat, std::unique_ptr<ASTUnit> *ErrAST,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
+    llvm::Optional<StringRef> ModuleFormat, std::unique_ptr<ASTUnit> *ErrAST) {
   assert(Diags.get() && "no DiagnosticsEngine was provided");
 
   SmallVector<StoredDiagnostic, 4> StoredDiagnostics;
@@ -1747,8 +1746,8 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
     CaptureDroppedDiagnostics Capture(CaptureDiagnostics, *Diags,
                                       &StoredDiagnostics, nullptr);
 
-    CI = createInvocationFromCommandLine(
-        llvm::makeArrayRef(ArgBegin, ArgEnd), Diags, VFS);
+    CI = createInvocationFromCommandLine(llvm::makeArrayRef(ArgBegin, ArgEnd),
+                                         Diags);
     if (!CI)
       return nullptr;
   }
@@ -1759,7 +1758,7 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
                                               RemappedFile.second);
   }
   PreprocessorOptions &PPOpts = CI->getPreprocessorOpts();
-  PPOpts.RemappedFilesKeepOriginalName = RemappedFilesKeepOriginalName;
+  PPOpts.RemappedFilesKeepOriginalName = true;
   PPOpts.AllowPCHWithCompilerErrors = AllowPCHWithCompilerErrors;
   PPOpts.SingleFileParseMode = SingleFileParse;
   PPOpts.RetainExcludedConditionalBlocks = RetainExcludedConditionalBlocks;
@@ -1782,8 +1781,8 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
   ConfigureDiags(Diags, *AST, CaptureDiagnostics);
   AST->Diagnostics = Diags;
   AST->FileSystemOpts = CI->getFileSystemOpts();
-  if (!VFS)
-    VFS = llvm::vfs::getRealFileSystem();
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
+      llvm::vfs::getRealFileSystem();
   VFS = createVFSFromCompilerInvocation(*CI, *Diags, VFS);
   AST->FileMgr = new FileManager(AST->FileSystemOpts, VFS);
   AST->ModuleCache = new InMemoryModuleCache;
