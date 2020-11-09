@@ -3564,11 +3564,10 @@ clang_parseTranslationUnit_Impl(CXIndex CIdx, const char *source_filename,
   llvm::CrashRecoveryContextCleanupRegistrar<std::vector<ASTUnit::RemappedFile>>
       RemappedCleanup(RemappedFiles.get());
 
-  for (auto &UF : unsaved_files) {
-    std::unique_ptr<llvm::MemoryBuffer> MB =
-        llvm::MemoryBuffer::getMemBufferCopy(getContents(UF), UF.Filename);
-    RemappedFiles->push_back(std::make_pair(UF.Filename, MB.release()));
-  }
+  for (auto &UF : unsaved_files)
+    RemappedFiles->push_back(std::make_pair(
+        UF.Filename,
+        llvm::MemoryBuffer::getMemBufferCopy(getContents(UF), UF.Filename)));
 
   std::unique_ptr<std::vector<const char *>> Args(
       new std::vector<const char *>());
@@ -3629,8 +3628,9 @@ clang_parseTranslationUnit_Impl(CXIndex CIdx, const char *source_filename,
       Args->data(), Args->data() + Args->size(),
       CXXIdx->getPCHContainerOperations(), Diags,
       CXXIdx->getClangResourcesPath(), CXXIdx->getOnlyLocalDecls(),
-      CaptureDiagnostics, *RemappedFiles.get(), PrecompilePreambleAfterNParses,
-      TUKind, CacheCodeCompletionResults, IncludeBriefCommentsInCodeCompletion,
+      CaptureDiagnostics, std::move(*RemappedFiles),
+      PrecompilePreambleAfterNParses, TUKind, CacheCodeCompletionResults,
+      IncludeBriefCommentsInCodeCompletion,
       /*AllowPCHWithCompilerErrors=*/true, SkipFunctionBodies, SingleFileParse,
       /*UserFilesAreVolatile=*/true, ForSerialization, RetainExcludedCB,
       CXXIdx->getPCHContainerOperations()->getRawReader().getFormat(),
@@ -4214,14 +4214,13 @@ clang_reparseTranslationUnit_Impl(CXTranslationUnit TU,
   llvm::CrashRecoveryContextCleanupRegistrar<std::vector<ASTUnit::RemappedFile>>
       RemappedCleanup(RemappedFiles.get());
 
-  for (auto &UF : unsaved_files) {
-    std::unique_ptr<llvm::MemoryBuffer> MB =
-        llvm::MemoryBuffer::getMemBufferCopy(getContents(UF), UF.Filename);
-    RemappedFiles->push_back(std::make_pair(UF.Filename, MB.release()));
-  }
+  for (auto &UF : unsaved_files)
+    RemappedFiles->push_back(std::make_pair(
+        UF.Filename,
+        llvm::MemoryBuffer::getMemBufferCopy(getContents(UF), UF.Filename)));
 
   if (!CXXUnit->Reparse(CXXIdx->getPCHContainerOperations(),
-                        *RemappedFiles.get()))
+                        std::move(*RemappedFiles)))
     return CXError_Success;
   if (isASTReadError(CXXUnit))
     return CXError_ASTReadError;

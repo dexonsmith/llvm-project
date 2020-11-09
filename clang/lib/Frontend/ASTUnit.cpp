@@ -775,9 +775,8 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
   AST->OnlyLocalDecls = OnlyLocalDecls;
   AST->CaptureDiagnostics = CaptureDiagnostics;
   AST->Diagnostics = Diags;
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-      llvm::vfs::getRealFileSystem();
-  AST->FileMgr = new FileManager(FileSystemOpts, VFS);
+  AST->initializeBaseFS(llvm::vfs::getRealFileSystem());
+  AST->FileMgr = new FileManager(FileSystemOpts, AST->FS);
   AST->UserFilesAreVolatile = UserFilesAreVolatile;
   AST->SourceMgr = new SourceManager(AST->getDiagnostics(),
                                      AST->getFileManager(),
@@ -1094,21 +1093,21 @@ static void checkAndSanitizeDiags(SmallVectorImpl<StoredDiagnostic> &
 /// \returns True if a failure occurred that causes the ASTUnit not to
 /// contain any translation-unit information, false otherwise.
 bool ASTUnit::Parse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-                    std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer,
-                    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
+                    std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer) {
   if (!Invocation)
     return true;
 
-  if (VFS && FileMgr)
-    assert(VFS == &FileMgr->getVirtualFileSystem() &&
-           "VFS passed to Parse and VFS in FileMgr are different");
+  assert((!FileMgr || &FileMgr->getVirtualFileSystem() == FS) &&
+         "ASTUnit has a FileManager without initializing FS");
 
   auto CCInvocation = std::make_shared<CompilerInvocation>(*Invocation);
   if (OverrideMainBuffer) {
     assert(Preamble &&
            "No preamble was built, but OverrideMainBuffer is not null");
-    Preamble->AddImplicitPreamble(*CCInvocation, VFS, OverrideMainBuffer.get());
+    Preamble->AddImplicitPreamble(*CCInvocation, FS, OverrideMainBuffer.get());
     // VFS may have changed...
+    if (FileMgr && &FileMgr->getVirtualFileSystem() != FS)
+      FileMgr->setVirtualFileSystem(FS);
   }
 
   // Create the compiler instance to use for building the AST.
@@ -1131,10 +1130,10 @@ bool ASTUnit::Parse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
   // Ensure that Clang has a FileManager with the right VFS, which may have
   // changed above in AddImplicitPreamble.  If VFS is nullptr, rely on
   // createFileManager to create one.
-  if (VFS && FileMgr && &FileMgr->getVirtualFileSystem() == VFS)
+  if (FileMgr && &FileMgr->getVirtualFileSystem() == FS)
     Clang->setFileManager(&*FileMgr);
   else
-    FileMgr = Clang->createFileManager(std::move(VFS));
+    FileMgr = Clang->createFileManager(FS);
 
   // Recover resources if we crash before exiting this method.
   llvm::CrashRecoveryContextCleanupRegistrar<CompilerInstance>
@@ -1299,13 +1298,12 @@ makeStandaloneDiagnostic(const LangOptions &LangOpts,
 std::unique_ptr<llvm::MemoryBuffer>
 ASTUnit::getMainBufferWithPrecompiledPreamble(
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-    CompilerInvocation &PreambleInvocationIn,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS, bool AllowRebuild,
+    CompilerInvocation &PreambleInvocationIn, bool AllowRebuild,
     unsigned MaxLines) {
   auto MainFilePath =
       PreambleInvocationIn.getFrontendOpts().Inputs[0].getFile();
   std::unique_ptr<llvm::MemoryBuffer> MainFileBuffer =
-      getBufferForFileHandlingRemapping(PreambleInvocationIn, VFS.get(),
+      getBufferForFileHandlingRemapping(PreambleInvocationIn, FS.get(),
                                         MainFilePath, UserFilesAreVolatile);
   if (!MainFileBuffer)
     return nullptr;
@@ -1317,7 +1315,7 @@ ASTUnit::getMainBufferWithPrecompiledPreamble(
 
   if (Preamble) {
     if (Preamble->CanReuse(PreambleInvocationIn, *MainFileBuffer, Bounds,
-                           *VFS)) {
+                           *FS, &*RemappedFilesFS)) {
       // Okay! We can re-use the precompiled preamble.
 
       // Set the state of the diagnostic object to mimic its state
@@ -1373,8 +1371,8 @@ ASTUnit::getMainBufferWithPrecompiledPreamble(
       PreambleInvocationIn.getFrontendOpts().SkipFunctionBodies = true;
 
     llvm::ErrorOr<PrecompiledPreamble> NewPreamble = PrecompiledPreamble::Build(
-        PreambleInvocationIn, MainFileBuffer.get(), Bounds, *Diagnostics, VFS,
-        PCHContainerOps, /*StoreInMemory=*/false, Callbacks);
+        PreambleInvocationIn, MainFileBuffer.get(), Bounds, *Diagnostics,
+        FS.get(), PCHContainerOps, /*StoreInMemory=*/false, Callbacks);
 
     PreambleInvocationIn.getFrontendOpts().SkipFunctionBodies =
         PreviousSkipFunctionBodies;
@@ -1492,12 +1490,11 @@ ASTUnit::create(std::shared_ptr<CompilerInvocation> CI,
                 bool UserFilesAreVolatile) {
   std::unique_ptr<ASTUnit> AST(new ASTUnit(false));
   ConfigureDiags(Diags, *AST, CaptureDiagnostics);
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-      createVFSFromCompilerInvocation(*CI, *Diags);
   AST->Diagnostics = Diags;
   AST->FileSystemOpts = CI->getFileSystemOpts();
   AST->Invocation = std::move(CI);
-  AST->FileMgr = new FileManager(AST->FileSystemOpts, VFS);
+  AST->computeAndInitializeFS(*AST->Invocation, *Diags);
+  AST->FileMgr = new FileManager(AST->FileSystemOpts, AST->FS);
   AST->UserFilesAreVolatile = UserFilesAreVolatile;
   AST->SourceMgr = new SourceManager(AST->getDiagnostics(), *AST->FileMgr,
                                      UserFilesAreVolatile);
@@ -1653,12 +1650,9 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
 
 bool ASTUnit::LoadFromCompilerInvocation(
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-    unsigned PrecompilePreambleAfterNParses,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
+    unsigned PrecompilePreambleAfterNParses) {
   if (!Invocation)
     return true;
-
-  assert(VFS && "VFS is null");
 
   // We'll manage file buffers ourselves.
   Invocation->getPreprocessorOpts().RetainRemappedFileBuffers = true;
@@ -1670,7 +1664,7 @@ bool ASTUnit::LoadFromCompilerInvocation(
   if (PrecompilePreambleAfterNParses > 0) {
     PreambleRebuildCountdown = PrecompilePreambleAfterNParses;
     OverrideMainBuffer =
-        getMainBufferWithPrecompiledPreamble(PCHContainerOps, *Invocation, VFS);
+        getMainBufferWithPrecompiledPreamble(PCHContainerOps, *Invocation);
     getDiagnostics().Reset();
     ProcessWarningOptions(getDiagnostics(), Invocation->getDiagnosticOpts());
   }
@@ -1682,15 +1676,15 @@ bool ASTUnit::LoadFromCompilerInvocation(
   llvm::CrashRecoveryContextCleanupRegistrar<llvm::MemoryBuffer>
     MemBufferCleanup(OverrideMainBuffer.get());
 
-  return Parse(std::move(PCHContainerOps), std::move(OverrideMainBuffer), VFS);
+  return Parse(std::move(PCHContainerOps), std::move(OverrideMainBuffer));
 }
 
 std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
     std::shared_ptr<CompilerInvocation> CI,
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, FileManager *FileMgr,
-    unsigned PrecompilePreambleAfterNParses,
-    bool UserFilesAreVolatile) {
+    unsigned PrecompilePreambleAfterNParses, bool UserFilesAreVolatile,
+    Optional<std::vector<RemappedFile>> RemappedFiles) {
   // Create the AST unit.
   std::unique_ptr<ASTUnit> AST(new ASTUnit(false));
   ConfigureDiags(Diags, *AST, CaptureDiagsKind::None);
@@ -1705,6 +1699,12 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
   AST->FileMgr = FileMgr;
   AST->UserFilesAreVolatile = UserFilesAreVolatile;
 
+  // If we have a file manager, this will update its VFS.
+  AST->computeAndInitializeFS(*AST->Invocation, *Diags);
+
+  // Override any files that need remapping.
+  AST->remapFiles(std::move(RemappedFiles));
+
   // Recover resources if we crash before exiting this method.
   llvm::CrashRecoveryContextCleanupRegistrar<ASTUnit>
     ASTUnitCleanup(AST.get());
@@ -1713,8 +1713,7 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
     DiagCleanup(Diags.get());
 
   if (AST->LoadFromCompilerInvocation(std::move(PCHContainerOps),
-                                      PrecompilePreambleAfterNParses,
-                                      &AST->FileMgr->getVirtualFileSystem()))
+                                      PrecompilePreambleAfterNParses))
     return nullptr;
   return AST;
 }
@@ -1724,7 +1723,7 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, StringRef ResourceFilesPath,
     bool OnlyLocalDecls, CaptureDiagsKind CaptureDiagnostics,
-    ArrayRef<RemappedFile> RemappedFiles,
+    Optional<std::vector<RemappedFile>> RemappedFiles,
     unsigned PrecompilePreambleAfterNParses, TranslationUnitKind TUKind,
     bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
     bool AllowPCHWithCompilerErrors, SkipFunctionBodiesScope SkipFunctionBodies,
@@ -1747,11 +1746,6 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
       return nullptr;
   }
 
-  // Override any files that need remapping
-  for (const auto &RemappedFile : RemappedFiles) {
-    CI->getPreprocessorOpts().addRemappedFile(RemappedFile.first,
-                                              RemappedFile.second);
-  }
   PreprocessorOptions &PPOpts = CI->getPreprocessorOpts();
   PPOpts.RemappedFilesKeepOriginalName = true;
   PPOpts.AllowPCHWithCompilerErrors = AllowPCHWithCompilerErrors;
@@ -1771,16 +1765,18 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
   // Create the AST unit.
   std::unique_ptr<ASTUnit> AST;
   AST.reset(new ASTUnit(false));
+
+  // Override any files that need remapping
+  AST->initializeBaseFS(createVFSFromCompilerInvocation(*CI, *Diags));
+  AST->remapFiles(std::move(RemappedFiles));
+
   AST->NumStoredDiagnosticsFromDriver = StoredDiagnostics.size();
   AST->StoredDiagnostics.swap(StoredDiagnostics);
   ConfigureDiags(Diags, *AST, CaptureDiagnostics);
   AST->Diagnostics = Diags;
   AST->FileSystemOpts = CI->getFileSystemOpts();
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-      llvm::vfs::getRealFileSystem();
-  VFS = createVFSFromCompilerInvocation(*CI, *Diags, VFS);
-  AST->adjustImplicitPCHIncludeForRemapping(*CI, VFS, RemappedFiles);
-  AST->FileMgr = new FileManager(AST->FileSystemOpts, VFS);
+  AST->adjustImplicitPCHIncludeForRemapping(*CI, RemappedFiles);
+  AST->FileMgr = new FileManager(AST->FileSystemOpts, AST->FS);
   AST->ModuleCache = new InMemoryModuleCache;
   AST->OnlyLocalDecls = OnlyLocalDecls;
   AST->CaptureDiagnostics = CaptureDiagnostics;
@@ -1802,8 +1798,7 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
     ASTUnitCleanup(AST.get());
 
   if (AST->LoadFromCompilerInvocation(std::move(PCHContainerOps),
-                                      PrecompilePreambleAfterNParses,
-                                      VFS)) {
+                                      PrecompilePreambleAfterNParses)) {
     // Some error occurred, if caller wants to examine diagnostics, pass it the
     // ASTUnit.
     if (ErrAST) {
@@ -1817,15 +1812,10 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
 }
 
 bool ASTUnit::Reparse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-                      ArrayRef<RemappedFile> RemappedFiles,
+                      Optional<std::vector<RemappedFile>> RemappedFiles,
                       IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS) {
   if (!Invocation)
     return true;
-
-  if (!VFS) {
-    assert(FileMgr && "FileMgr is null on Reparse call");
-    VFS = &FileMgr->getVirtualFileSystem();
-  }
 
   clearFileLevelDecls();
 
@@ -1833,23 +1823,23 @@ bool ASTUnit::Reparse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
   ParsingTimer.setOutput("Reparsing " + getMainFileName());
 
   // Remap files.
-  adjustImplicitPCHIncludeForRemapping(*Invocation, VFS, RemappedFiles);
+  reinitializeBaseFS(std::move(VFS));
+  adjustImplicitPCHIncludeForRemapping(*Invocation, RemappedFiles);
+  remapFiles(std::move(RemappedFiles));
+
+  // Clear out buffers in the Invocation.
   PreprocessorOptions &PPOpts = Invocation->getPreprocessorOpts();
   for (const auto &RB : PPOpts.RemappedFileBuffers)
     delete RB.second;
 
   Invocation->getPreprocessorOpts().clearRemappedFiles();
-  for (const auto &RemappedFile : RemappedFiles) {
-    Invocation->getPreprocessorOpts().addRemappedFile(RemappedFile.first,
-                                                      RemappedFile.second);
-  }
 
   // If we have a preamble file lying around, or if we might try to
   // build a precompiled preamble, do so now.
   std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer;
   if (Preamble || PreambleRebuildCountdown > 0)
     OverrideMainBuffer =
-        getMainBufferWithPrecompiledPreamble(PCHContainerOps, *Invocation, VFS);
+        getMainBufferWithPrecompiledPreamble(PCHContainerOps, *Invocation);
 
   // Clear out the diagnostics state.
   FileMgr.reset();
@@ -1860,7 +1850,7 @@ bool ASTUnit::Reparse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
 
   // Parse the sources
   bool Result =
-      Parse(std::move(PCHContainerOps), std::move(OverrideMainBuffer), VFS);
+      Parse(std::move(PCHContainerOps), std::move(OverrideMainBuffer));
 
   // If we're caching global code-completion results, and the top-level
   // declarations have changed, clear out the code-completion cache.
@@ -2130,7 +2120,7 @@ void AugmentedCodeCompleteConsumer::ProcessCodeCompleteResults(Sema &S,
 
 void ASTUnit::CodeComplete(
     StringRef File, unsigned Line, unsigned Column,
-    ArrayRef<RemappedFile> RemappedFiles, bool IncludeMacros,
+    Optional<std::vector<RemappedFile>> RemappedFiles, bool IncludeMacros,
     bool IncludeCodePatterns, bool IncludeBriefComments,
     CodeCompleteConsumer &Consumer,
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
@@ -2213,22 +2203,22 @@ void ASTUnit::CodeComplete(
              Language::LLVM_IR &&
          "IR inputs not support here!");
 
+  // Remap files.
+  reinitializeBaseFS();
+  adjustImplicitPCHIncludeForRemapping(Inv, RemappedFiles);
+  remapFiles(std::move(RemappedFiles));
+
   // Initialize file and source managers up front so that the caller can access
   // them after.
   Clang->createFileManager(FS);
+  Clang->createSourceManager(Clang->getFileManager());
   FileMgr = &Clang->getFileManager();
-  Clang->createSourceManager(*FileMgr);
   SourceMgr = &Clang->getSourceManager();
 
-  // Remap files.
-  adjustImplicitPCHIncludeForRemapping(Inv, &FileMgr->getVirtualFileSystem(),
-                                       RemappedFiles);
-  PreprocessorOpts.clearRemappedFiles();
+  // Clear out buffers in the invocation and prepare for any overridden buffers
+  // there by requesting they be retained.
   PreprocessorOpts.RetainRemappedFileBuffers = true;
-  for (const auto &RemappedFile : RemappedFiles) {
-    PreprocessorOpts.addRemappedFile(RemappedFile.first, RemappedFile.second);
-    OwnedBuffers.push_back(RemappedFile.second);
-  }
+  PreprocessorOpts.clearRemappedFiles();
 
   // Use the code completion consumer we were given, but adding any cached
   // code-completion results.
@@ -2237,8 +2227,8 @@ void ASTUnit::CodeComplete(
   Clang->setCodeCompletionConsumer(AugmentedConsumer);
 
   auto getUniqueID =
-      [&FileMgr](StringRef Filename) -> Optional<llvm::sys::fs::UniqueID> {
-    if (auto Status = FileMgr.getVirtualFileSystem().status(Filename))
+      [this](StringRef Filename) -> Optional<llvm::sys::fs::UniqueID> {
+    if (auto Status = BaseFS->status(Filename))
       return Status->getUniqueID();
     return None;
   };
@@ -2259,7 +2249,7 @@ void ASTUnit::CodeComplete(
   std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer;
   if (Preamble && Line > 1 && hasSameUniqueID(File, OriginalSourceFile)) {
     OverrideMainBuffer = getMainBufferWithPrecompiledPreamble(
-        PCHContainerOps, Inv, &FileMgr.getVirtualFileSystem(), false, Line - 1);
+        PCHContainerOps, Inv, false, Line - 1);
   }
 
   // If the main file has been overridden due to the use of a preamble,
@@ -2268,9 +2258,7 @@ void ASTUnit::CodeComplete(
     assert(Preamble &&
            "No preamble was built, but OverrideMainBuffer is not null");
 
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-        &FileMgr.getVirtualFileSystem();
-    Preamble->AddImplicitPreamble(Clang->getInvocation(), VFS,
+    Preamble->AddImplicitPreamble(Clang->getInvocation(), FS,
                                   OverrideMainBuffer.get());
     // FIXME: there is no way to update VFS if it was changed by
     // AddImplicitPreamble as FileMgr is accepted as a parameter by this method.
@@ -2292,6 +2280,9 @@ void ASTUnit::CodeComplete(
     if (llvm::Error Err = Act->Execute()) {
       consumeError(std::move(Err)); // FIXME this drops errors on the floor.
     }
+
+    transferASTDataFromCompilerInstance(*Clang);
+
     Act->EndSourceFile();
   }
 }
@@ -2718,9 +2709,8 @@ void ASTUnit::ConcurrencyState::finish() {}
 
 void ASTUnit::adjustImplicitPCHIncludeForRemapping(
     CompilerInvocation &Invocation,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
     ArrayRef<ASTUnit::RemappedFile> RemappedFiles) {
-  assert(VFS && "Expected a working filesystem");
+  assert(this->FS && "Expected a working filesystem");
 
   auto &PPOpts = Invocation->getPreprocessorOpts();
   if (PPOpts.ImplicitPCHInclude.empty())
@@ -2731,7 +2721,7 @@ void ASTUnit::adjustImplicitPCHIncludeForRemapping(
     return;
 
   // Filter these files down to the ones that exist on disk.
-  FileManager FM(Invocation->getFileSystemOpts(), *VFS);
+  FileManager FM(Invocation->getFileSystemOpts(), *this->FS);
   llvm::SmallDenseSet<const FileEntry *, 16> Remapped;
   for (auto &RF : RemappedFiles)
     if (auto F = FM.getOptionalFileRef(RF.first))
@@ -2818,4 +2808,65 @@ void ASTUnit::adjustImplicitPCHIncludeForRemapping(
       << *Checker.OverriddenInputFile;
   PPOpts.Includes.insert(PPOpts.Includes.begin(), OriginalSourceFile)
   PPOpts.ImplicitPCHInclude = std::string();
+}
+
+void ASTUnit::initializeBaseFS(IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
+  assert(BaseFS && "Given empty base filesystem?");
+  if (this->BaseFS == BaseFS || this->FS == BaseFS)
+    return;
+
+  llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> OverlayFS(
+      new llvm::vfs::OverlayFileSystem(BaseFS));
+  RemappedFilesFS = new llvm::vfs::InMemoryFileSystem;
+  OverlayFS->pushOverlay(RemappedFilesFS);
+  FS = std::move(OverlayFS);
+  this->BaseFS = std::move(BaseFS);
+  if (FileMgr)
+    FileMgr->setVirtualFileSystem(FS);
+}
+
+void ASTUnit::reinitializeBaseFS(
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> MaybeFS) {
+  assert(FS && "Resetting without initializing?");
+  assert(BaseFS && "Resetting without initializing?");
+  assert(RemappedFilesFS && "Resetting without initializing?");
+  if (!MaybeFS)
+    MaybeFS = std::move(BaseFS);
+  else
+    BaseFS.reset();
+
+  RemappedFilesFS.reset();
+  FS.reset();
+
+  // Reinitialize.
+  initializeBaseFS(std::move(MaybeFS));
+}
+
+IntrusiveRefCntPtr<llvm::vfs::FileSystem> ASTUnit::computeBaseFS(
+    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> MaybeFS) const {
+  if (MaybeFS)
+    return FS == MaybeFS ? BaseFS : MaybeFS;
+  if (!FileMgr)
+    return FS ? BaseFS : createVFSFromCompilerInvocation(CI, Diags);
+
+  llvm::vfs::FileSystem &FMFS = FileMgr->getVirtualFileSystem();
+  return FS == &FMFS ? BaseFS : &FMFS;
+}
+
+void ASTUnit::computeAndInitializeFS(
+    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> MaybeFS) {
+  initializeBaseFS(computeBaseFS(CI, Diags, std::move(MaybeFS)));
+}
+
+void ASTUnit::remapFiles(Optional<std::vector<RemappedFile>> RemappedFiles) {
+  if (!RemappedFiles || RemappedFiles->empty())
+    return;
+
+  // Add files to the in-memory filesystem in reverse order to ensure the last
+  // mapping "wins". This works because InMemoryFileSystem::addFile ignores
+  // subsequent calls.
+  for (auto &File : llvm::reverse(*RemappedFiles))
+    RemappedFilesFS->addFile(File.first, 0, std::move(File.second));
 }

@@ -247,7 +247,7 @@ namespace {
 /// AllocatedCXCodeCompleteResults outlives the CXTranslationUnit, so we can
 /// not rely on the StringPool in the TU.
 struct AllocatedCXCodeCompleteResults : public CXCodeCompleteResults {
-  AllocatedCXCodeCompleteResults(IntrusiveRefCntPtr<FileManager> FileMgr);
+  AllocatedCXCodeCompleteResults();
   ~AllocatedCXCodeCompleteResults();
   
   /// Diagnostics produced while performing code completion.
@@ -354,8 +354,7 @@ CXString clang_getCompletionFixIt(CXCodeCompleteResults *results,
 /// Used for debugging purposes only.
 static std::atomic<unsigned> CodeCompletionResultObjects;
 
-AllocatedCXCodeCompleteResults::AllocatedCXCodeCompleteResults(
-    IntrusiveRefCntPtr<FileManager> FileMgr)
+AllocatedCXCodeCompleteResults::AllocatedCXCodeCompleteResults()
     : CXCodeCompleteResults(), DiagOpts(new DiagnosticOptions),
       Diag(new DiagnosticsEngine(
           IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs), &*DiagOpts)),
@@ -717,21 +716,19 @@ clang_codeCompleteAt_Impl(CXTranslationUnit TU, const char *complete_filename,
   ASTUnit::ConcurrencyCheck Check(*AST);
 
   // Perform the remapping of source files.
-  SmallVector<ASTUnit::RemappedFile, 4> RemappedFiles;
+  std::vector<ASTUnit::RemappedFile> RemappedFiles;
 
-  for (auto &UF : unsaved_files) {
-    std::unique_ptr<llvm::MemoryBuffer> MB =
-        llvm::MemoryBuffer::getMemBufferCopy(getContents(UF), UF.Filename);
-    RemappedFiles.push_back(std::make_pair(UF.Filename, MB.release()));
-  }
+  for (auto &UF : unsaved_files)
+    RemappedFiles.push_back(std::make_pair(
+        UF.Filename,
+        llvm::MemoryBuffer::getMemBufferCopy(getContents(UF), UF.Filename)));
 
   if (EnableLogging) {
     // FIXME: Add logging.
   }
 
   // Parse the resulting source file to find code-completion results.
-  AllocatedCXCodeCompleteResults *Results = new AllocatedCXCodeCompleteResults(
-      &AST->getFileManager());
+  AllocatedCXCodeCompleteResults *Results = new AllocatedCXCodeCompleteResults;
   Results->Results = nullptr;
   Results->NumResults = 0;
   
@@ -754,8 +751,8 @@ clang_codeCompleteAt_Impl(CXTranslationUnit TU, const char *complete_filename,
       *CXXIdx, LibclangInvocationReporter::OperationKind::CompletionOperation,
       TU->ParsingOptions, CArgs, CompletionInvocation, unsaved_files);
   AST->CodeComplete(
-      complete_filename, complete_line, complete_column, RemappedFiles,
-      (options & CXCodeComplete_IncludeMacros),
+      complete_filename, complete_line, complete_column,
+      std::move(RemappedFiles), (options & CXCodeComplete_IncludeMacros),
       (options & CXCodeComplete_IncludeCodePatterns), IncludeBriefComments,
       Capture, CXXIdx->getPCHContainerOperations(), *Results->Diag,
       Results->LangOpts, Results->Diagnostics, Results->TemporaryBuffers);

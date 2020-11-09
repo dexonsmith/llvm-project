@@ -388,6 +388,7 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
   Diagnostics.Reset();
   ProcessWarningOptions(Diagnostics, Clang->getDiagnosticOpts());
 
+  // FIXME: should this be deleted? Can we trust that the caller has done this?
   VFS =
       createVFSFromCompilerInvocation(Clang->getInvocation(), Diagnostics, VFS);
 
@@ -404,6 +405,9 @@ llvm::ErrorOr<PrecompiledPreamble> PrecompiledPreamble::Build(
   Clang->getLangOpts().CompilingPCH = true;
 
   // Remap the main source file to the preamble buffer.
+  //
+  // Note: the buffer needs to be overridden in the SourceManager so that the
+  // preamble is serialized the AST file.
   StringRef MainFilePath = FrontendOpts.Inputs[0].getFile();
   auto PreambleInputBuffer = llvm::MemoryBuffer::getMemBufferCopy(
       MainFileBuffer->getBuffer().slice(0, Bounds.Size), MainFilePath);
@@ -500,11 +504,11 @@ std::size_t PrecompiledPreamble::getSize() const {
   llvm_unreachable("Unhandled storage kind");
 }
 
-bool PrecompiledPreamble::CanReuse(const CompilerInvocation &Invocation,
-                                   const llvm::MemoryBufferRef &MainFileBuffer,
-                                   PreambleBounds Bounds,
-                                   llvm::vfs::FileSystem &VFS) const {
-
+bool PrecompiledPreamble::CanReuse(
+    const CompilerInvocation &Invocation,
+    const llvm::MemoryBufferRef &MainFileBuffer, PreambleBounds Bounds,
+    llvm::vfs::FileSystem &VFS,
+    llvm::vfs::FileSystem *OverriddenFilesFS) const {
   assert(
       Bounds.Size <= MainFileBuffer.getBufferSize() &&
       "Buffer is too large. Bounds were calculated from a different buffer?");
@@ -564,6 +568,15 @@ bool PrecompiledPreamble::CanReuse(const CompilerInvocation &Invocation,
 
   // Check whether anything has changed.
   for (const auto &F : FilesInPreamble) {
+    if (OverriddenFilesFS) {
+      std::unique_ptr<llvm::MemoryBuffer> Buffer;
+      if (moveOnNoError(OverriddenFilesFS->getBufferForFile(F.first()),
+                        Buffer)) {
+        if (PreambleFileHash::createForMemoryBuffer(*Buffer) != F.second)
+          return false;
+        continue;
+      }
+    }
     auto OverridenFileBuffer = OverridenFileBuffers.find(F.first());
     if (OverridenFileBuffer != OverridenFileBuffers.end()) {
       // The file's buffer was remapped and the file was not found in VFS.
@@ -804,7 +817,7 @@ void PrecompiledPreamble::configurePreamble(
 
   auto &PreprocessorOpts = CI.getPreprocessorOpts();
 
-  // Remap main file to point to MainFileBuffer.
+  // Remap main file to point to MainFileBuffer (instead of the preamble).
   auto MainFilePath = CI.getFrontendOpts().Inputs[0].getFile();
   PreprocessorOpts.addRemappedFile(MainFilePath, MainFileBuffer);
 

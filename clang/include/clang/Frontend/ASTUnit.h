@@ -53,6 +53,7 @@ class MemoryBuffer;
 namespace vfs {
 
 class FileSystem;
+class InMemoryFileSystem;
 
 } // namespace vfs
 } // namespace llvm
@@ -108,6 +109,16 @@ public:
 private:
   std::shared_ptr<LangOptions>            LangOpts;
   IntrusiveRefCntPtr<DiagnosticsEngine>   Diagnostics;
+
+  /// The top-level filesystem.
+  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS;
+
+  /// Filesystem for remapped file buffers.
+  llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> RemappedFilesFS;
+
+  /// The base filesystem from the CompilerInvocation.
+  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS;
+
   IntrusiveRefCntPtr<FileManager>         FileMgr;
   IntrusiveRefCntPtr<SourceManager>       SourceMgr;
   IntrusiveRefCntPtr<InMemoryModuleCache> ModuleCache;
@@ -368,13 +379,11 @@ private:
   explicit ASTUnit(bool MainFileIsAST);
 
   bool Parse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-             std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer,
-             IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS);
+             std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer);
 
   std::unique_ptr<llvm::MemoryBuffer> getMainBufferWithPrecompiledPreamble(
       std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-      CompilerInvocation &PreambleInvocationIn,
-      IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS, bool AllowRebuild = true,
+      CompilerInvocation &PreambleInvocationIn, bool AllowRebuild = true,
       unsigned MaxLines = 0);
   void RealizeTopLevelDeclsFromPreamble();
 
@@ -659,7 +668,8 @@ public:
 
   /// A mapping from a file name to the memory buffer that stores the
   /// remapped contents of that file.
-  using RemappedFile = std::pair<std::string, llvm::MemoryBuffer *>;
+  using RemappedFile =
+      std::pair<std::string, std::unique_ptr<llvm::MemoryBuffer>>;
 
   /// Create a ASTUnit. Gets ownership of the passed CompilerInvocation.
   static std::unique_ptr<ASTUnit>
@@ -706,17 +716,11 @@ private:
   /// of this translation unit should be precompiled, to improve the performance
   /// of reparsing. Set to zero to disable preambles.
   ///
-  /// \param VFS - A llvm::vfs::FileSystem to be used for all file accesses.
-  /// Note that preamble is saved to a temporary directory on a RealFileSystem,
-  /// so in order for it to be loaded correctly, VFS should have access to
-  /// it(i.e., be an overlay over RealFileSystem).
-  ///
   /// \returns \c true if a catastrophic failure occurred (which means that the
   /// \c ASTUnit itself is invalid), or \c false otherwise.
   bool LoadFromCompilerInvocation(
       std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-      unsigned PrecompilePreambleAfterNParses,
-      IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS);
+      unsigned PrecompilePreambleAfterNParses);
 
 public:
   /// Create an ASTUnit from a source file, via a CompilerInvocation
@@ -779,7 +783,8 @@ public:
       std::shared_ptr<PCHContainerOperations> PCHContainerOps,
       IntrusiveRefCntPtr<DiagnosticsEngine> Diags, FileManager *FileMgr,
       unsigned PrecompilePreambleAfterNParses = 0,
-      bool UserFilesAreVolatile = false);
+      bool UserFilesAreVolatile = false,
+      Optional<std::vector<RemappedFile>> RemappedFiles = None);
 
   /// LoadFromCommandLine - Create an ASTUnit from a vector of command line
   /// arguments, which must specify exactly one source file.
@@ -802,12 +807,6 @@ public:
   /// (e.g. because the PCH could not be loaded), this accepts the ASTUnit
   /// mainly to allow the caller to see the diagnostics.
   ///
-  /// \param VFS - A llvm::vfs::FileSystem to be used for all file accesses.
-  /// Note that preamble is saved to a temporary directory on a RealFileSystem,
-  /// so in order for it to be loaded correctly, VFS should have access to
-  /// it(i.e., be an overlay over RealFileSystem). RealFileSystem will be used
-  /// if \p VFS is nullptr.
-  ///
   // FIXME: Move OnlyLocalDecls, UseBumpAllocator to setters on the ASTUnit, we
   // shouldn't need to specify them at construction time.
   static ASTUnit *LoadFromCommandLine(
@@ -816,7 +815,7 @@ public:
       IntrusiveRefCntPtr<DiagnosticsEngine> Diags, StringRef ResourceFilesPath,
       bool OnlyLocalDecls = false,
       CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
-      ArrayRef<RemappedFile> RemappedFiles = None,
+      Optional<std::vector<RemappedFile>> RemappedFiles = None,
       unsigned PrecompilePreambleAfterNParses = 0,
       TranslationUnitKind TUKind = TU_Complete,
       bool CacheCodeCompletionResults = false,
@@ -842,7 +841,7 @@ public:
   /// \returns True if a failure occurred that causes the ASTUnit not to
   /// contain any translation-unit information, false otherwise.
   bool Reparse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-               ArrayRef<RemappedFile> RemappedFiles = None,
+               Optional<std::vector<RemappedFile>> RemappedFiles = None,
                IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = nullptr);
 
   /// Free data that will be re-generated on the next parse.
@@ -871,9 +870,9 @@ public:
   /// FIXME: The Diag, LangOpts, SourceMgr, FileMgr, StoredDiagnostics, and
   /// OwnedBuffers parameters are all disgusting hacks. They will go away.
   void CodeComplete(StringRef File, unsigned Line, unsigned Column,
-                    ArrayRef<RemappedFile> RemappedFiles, bool IncludeMacros,
-                    bool IncludeCodePatterns, bool IncludeBriefComments,
-                    CodeCompleteConsumer &Consumer,
+                    Optional<std::vector<RemappedFile>> RemappedFiles,
+                    bool IncludeMacros, bool IncludeCodePatterns,
+                    bool IncludeBriefComments, CodeCompleteConsumer &Consumer,
                     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
                     DiagnosticsEngine &Diag, LangOptions &LangOpts,
                     SmallVectorImpl<StoredDiagnostic> &StoredDiagnostics,
@@ -893,8 +892,18 @@ public:
 private:
   static void adjustImplicitPCHIncludeForRemapping(
       CompilerInvocation &Invocation,
-      IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
       ArrayRef<ASTUnit::RemappedFile> RemappedFiles);
+
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> computeBaseFS(
+      const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+      IntrusiveRefCntPtr<llvm::vfs::FileSystem> MaybeFS = nullptr) const;
+  void initializeBaseFS(IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS);
+  void computeAndInitializeFS(
+      const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+      IntrusiveRefCntPtr<llvm::vfs::FileSystem> MaybeFS = nullptr);
+  void reinitializeBaseFS(
+      IntrusiveRefCntPtr<llvm::vfs::FileSystem> MaybeFS = nullptr);
+  void remapFiles(Optional<std::vector<RemappedFile>> RemappedFiles);
 };
 
 } // namespace clang

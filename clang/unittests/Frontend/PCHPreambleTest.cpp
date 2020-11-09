@@ -85,11 +85,6 @@ public:
 
     CI->getTargetOpts().Triple = "i386-unknown-linux-gnu";
 
-    CI->getPreprocessorOpts().RemappedFileBuffers = GetRemappedFiles();
-
-    PreprocessorOptions &PPOpts = CI->getPreprocessorOpts();
-    PPOpts.RemappedFilesKeepOriginalName = true;
-
     IntrusiveRefCntPtr<DiagnosticsEngine>
       Diags(CompilerInstance::createDiagnostics(new DiagnosticOptions, new DiagnosticConsumer));
 
@@ -97,7 +92,8 @@ public:
 
     std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromCompilerInvocation(
         CI, PCHContainerOpts, Diags, FileMgr,
-        /*PrecompilePreambleAfterNParses=*/1);
+        /*PrecompilePreambleAfterNParses=*/1, /*UserFilesAreVolatile=*/false,
+        GetRemappedFiles());
     return AST;
   }
 
@@ -111,9 +107,8 @@ public:
   }
 
 private:
-  std::vector<std::pair<std::string, llvm::MemoryBuffer *>>
-  GetRemappedFiles() const {
-    std::vector<std::pair<std::string, llvm::MemoryBuffer *>> Remapped;
+  std::vector<ASTUnit::RemappedFile> GetRemappedFiles() const {
+    std::vector<ASTUnit::RemappedFile> Remapped;
     for (const auto &RemappedFile : RemappedFiles) {
       std::unique_ptr<MemoryBuffer> buf = MemoryBuffer::getMemBufferCopy(
         RemappedFile.second, RemappedFile.first());
