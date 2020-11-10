@@ -359,8 +359,6 @@ AllocatedCXCodeCompleteResults::AllocatedCXCodeCompleteResults(
     : CXCodeCompleteResults(), DiagOpts(new DiagnosticOptions),
       Diag(new DiagnosticsEngine(
           IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs), &*DiagOpts)),
-      FileMgr(std::move(FileMgr)),
-      SourceMgr(new SourceManager(*Diag, *this->FileMgr)),
       CodeCompletionAllocator(
           std::make_shared<clang::GlobalCodeCompletionAllocator>()),
       Contexts(CXCompletionContext_Unknown),
@@ -755,14 +753,15 @@ clang_codeCompleteAt_Impl(CXTranslationUnit TU, const char *complete_filename,
   LibclangInvocationReporter InvocationReporter(
       *CXXIdx, LibclangInvocationReporter::OperationKind::CompletionOperation,
       TU->ParsingOptions, CArgs, CompletionInvocation, unsaved_files);
-  AST->CodeComplete(complete_filename, complete_line, complete_column,
-                    RemappedFiles, (options & CXCodeComplete_IncludeMacros),
-                    (options & CXCodeComplete_IncludeCodePatterns),
-                    IncludeBriefComments, Capture,
-                    CXXIdx->getPCHContainerOperations(), *Results->Diag,
-                    Results->LangOpts, *Results->SourceMgr, *Results->FileMgr,
-                    Results->Diagnostics, Results->TemporaryBuffers);
+  AST->CodeComplete(
+      complete_filename, complete_line, complete_column, RemappedFiles,
+      (options & CXCodeComplete_IncludeMacros),
+      (options & CXCodeComplete_IncludeCodePatterns), IncludeBriefComments,
+      Capture, CXXIdx->getPCHContainerOperations(), *Results->Diag,
+      Results->LangOpts, Results->Diagnostics, Results->TemporaryBuffers);
 
+  Results->FileMgr = &AST->getFileManager();
+  Results->SourceMgr = &AST->getSourceManager();
   Results->DiagnosticsWrappers.resize(Results->Diagnostics.size());
 
   // Keep a reference to the allocator used for cached global completions, so

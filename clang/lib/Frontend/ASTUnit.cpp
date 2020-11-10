@@ -2132,8 +2132,8 @@ void ASTUnit::CodeComplete(
     bool IncludeCodePatterns, bool IncludeBriefComments,
     CodeCompleteConsumer &Consumer,
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-    DiagnosticsEngine &Diag, LangOptions &LangOpts, SourceManager &SourceMgr,
-    FileManager &FileMgr, SmallVectorImpl<StoredDiagnostic> &StoredDiagnostics,
+    DiagnosticsEngine &Diag, LangOptions &LangOpts,
+    SmallVectorImpl<StoredDiagnostic> &StoredDiagnostics,
     SmallVectorImpl<const llvm::MemoryBuffer *> &OwnedBuffers) {
   if (!Invocation)
     return;
@@ -2211,9 +2211,12 @@ void ASTUnit::CodeComplete(
              Language::LLVM_IR &&
          "IR inputs not support here!");
 
-  // Use the source and file managers that we were given.
-  Clang->setFileManager(&FileMgr);
-  Clang->setSourceManager(&SourceMgr);
+  // Initialize file and source managers up front so that the caller can access
+  // them after.
+  Clang->createFileManager(FS);
+  FileMgr = &Clang->getFileManager();
+  Clang->createSourceManager(*FileMgr);
+  SourceMgr = &Clang->getSourceManager();
 
   // Remap files.
   PreprocessorOpts.clearRemappedFiles();

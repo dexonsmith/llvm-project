@@ -876,7 +876,6 @@ public:
                     CodeCompleteConsumer &Consumer,
                     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
                     DiagnosticsEngine &Diag, LangOptions &LangOpts,
-                    SourceManager &SourceMgr, FileManager &FileMgr,
                     SmallVectorImpl<StoredDiagnostic> &StoredDiagnostics,
                     SmallVectorImpl<const llvm::MemoryBuffer *> &OwnedBuffers);
 
