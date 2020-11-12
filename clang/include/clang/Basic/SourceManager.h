@@ -177,10 +177,8 @@ public:
 
   mutable unsigned IsBufferInvalid : 1;
 
-  ContentCache(const FileEntry *Ent = nullptr) : ContentCache(Ent, Ent) {}
-
-  ContentCache(const FileEntry *Ent, const FileEntry *contentEnt)
-      : OrigEntry(Ent), ContentsEntry(contentEnt), BufferOverridden(false),
+  ContentCache(const FileEntry *Ent = nullptr)
+      : OrigEntry(Ent), ContentsEntry(Ent), BufferOverridden(false),
         IsFileVolatile(false), IsTransient(false), IsBufferInvalid(false) {}
 
   /// The copy ctor does not allow copies where source object has either
@@ -655,10 +653,6 @@ class SourceManager : public RefCountedBase<SourceManager> {
   bool FilesAreTransient = false;
 
   struct OverriddenFilesInfoTy {
-    /// Files that have been overridden with the contents from another
-    /// file.
-    llvm::DenseMap<const FileEntry *, const FileEntry *> OverriddenFiles;
-
     /// Files that were overridden with a memory buffer.
     llvm::DenseSet<const FileEntry *> OverriddenFilesWithBuffer;
   };
@@ -960,22 +954,10 @@ public:
   void overrideFileContents(const FileEntry *SourceFile,
                             std::unique_ptr<llvm::MemoryBuffer> Buffer);
 
-  /// Override the given source file with another one.
-  ///
-  /// \param SourceFile the source file which will be overridden.
-  ///
-  /// \param NewFile the file whose contents will be used as the
-  /// data instead of the contents of the given source file.
-  void overrideFileContents(const FileEntry *SourceFile,
-                            const FileEntry *NewFile);
-
   /// Returns true if the file contents have been overridden.
   bool isFileOverridden(const FileEntry *File) const {
     if (OverriddenFilesInfo) {
       if (OverriddenFilesInfo->OverriddenFilesWithBuffer.count(File))
-        return true;
-      if (OverriddenFilesInfo->OverriddenFiles.find(File) !=
-          OverriddenFilesInfo->OverriddenFiles.end())
         return true;
     }
     return false;

@@ -534,21 +534,6 @@ bool PrecompiledPreamble::CanReuse(
   // remapping or unsaved_files.
   std::map<llvm::sys::fs::UniqueID, PreambleFileHash> OverriddenFiles;
   llvm::StringSet<> OverriddenAbsPaths; // Either by buffers or files.
-  for (const auto &R : PreprocessorOpts.RemappedFiles) {
-    llvm::vfs::Status Status;
-    if (!moveOnNoError(VFS.status(R.second), Status)) {
-      // If we can't stat the file we're remapping to, assume that something
-      // horrible happened.
-      return false;
-    }
-    // If a mapped file was previously missing, then it has changed.
-    llvm::SmallString<128> MappedPath(R.first);
-    if (!VFS.makeAbsolute(MappedPath))
-      OverriddenAbsPaths.insert(MappedPath);
-
-    OverriddenFiles[Status.getUniqueID()] = PreambleFileHash::createForFile(
-        Status.getSize(), llvm::sys::toTimeT(Status.getLastModificationTime()));
-  }
 
   // OverridenFileBuffers tracks only the files not found in VFS.
   llvm::StringMap<PreambleFileHash> OverridenFileBuffers;

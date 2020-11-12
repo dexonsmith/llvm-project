@@ -170,21 +170,6 @@ getBufferForFileHandlingRemapping(const CompilerInvocation &Invocation,
   if (FileStatus) {
     llvm::sys::fs::UniqueID MainFileID = FileStatus->getUniqueID();
 
-    // Check whether there is a file-file remapping of the main file
-    for (const auto &RF : PreprocessorOpts.RemappedFiles) {
-      std::string MPath(RF.first);
-      auto MPathStatus = VFS->status(MPath);
-      if (MPathStatus) {
-        llvm::sys::fs::UniqueID MID = MPathStatus->getUniqueID();
-        if (MainFileID == MID) {
-          // We found a remapping. Try to load the resulting, remapped source.
-          BufferOwner = valueOrNull(VFS->getBufferForFile(RF.second, -1, true, isVolatile));
-          if (!BufferOwner)
-            return nullptr;
-        }
-      }
-    }
-
     // Check whether there is a file-buffer remapping. It supercedes the
     // file-file remapping.
     for (const auto &RB : PreprocessorOpts.RemappedFileBuffers) {
@@ -1747,7 +1732,6 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
   }
 
   PreprocessorOptions &PPOpts = CI->getPreprocessorOpts();
-  PPOpts.RemappedFilesKeepOriginalName = true;
   PPOpts.AllowPCHWithCompilerErrors = AllowPCHWithCompilerErrors;
   PPOpts.SingleFileParseMode = SingleFileParse;
   PPOpts.RetainExcludedConditionalBlocks = RetainExcludedConditionalBlocks;

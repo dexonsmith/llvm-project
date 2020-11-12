@@ -392,20 +392,7 @@ ContentCache &SourceManager::getOrCreateContentCache(const FileEntry *FileEnt,
   // Nope, create a new Cache entry.
   Entry = ContentCacheAlloc.Allocate<ContentCache>();
 
-  if (OverriddenFilesInfo) {
-    // If the file contents are overridden with contents from another file,
-    // pass that file to ContentCache.
-    llvm::DenseMap<const FileEntry *, const FileEntry *>::iterator
-        overI = OverriddenFilesInfo->OverriddenFiles.find(FileEnt);
-    if (overI == OverriddenFilesInfo->OverriddenFiles.end())
-      new (Entry) ContentCache(FileEnt);
-    else
-      new (Entry) ContentCache(OverridenFilesKeepOriginalName ? FileEnt
-                                                              : overI->second,
-                               overI->second);
-  } else {
-    new (Entry) ContentCache(FileEnt);
-  }
+  new (Entry) ContentCache(FileEnt);
 
   Entry->IsFileVolatile = UserFilesAreVolatile && !isSystemFile;
   Entry->IsTransient = FilesAreTransient;
@@ -685,17 +672,6 @@ void SourceManager::overrideFileContents(
   IR.BufferOverridden = true;
 
   getOverriddenFilesInfo().OverriddenFilesWithBuffer.insert(SourceFile);
-}
-
-void SourceManager::overrideFileContents(const FileEntry *SourceFile,
-                                         const FileEntry *NewFile) {
-  assert(SourceFile->getSize() == NewFile->getSize() &&
-         "Different sizes, use the FileManager to create a virtual file with "
-         "the correct size");
-  assert(FileInfos.count(SourceFile) == 0 &&
-         "This function should be called at the initialization stage, before "
-         "any parsing occurs.");
-  getOverriddenFilesInfo().OverriddenFiles[SourceFile] = NewFile;
 }
 
 const FileEntry *
@@ -2182,9 +2158,6 @@ size_t SourceManager::getDataStructureSizes() const {
     + llvm::capacity_in_bytes(LoadedSLocEntryTable)
     + llvm::capacity_in_bytes(SLocEntryLoaded)
     + llvm::capacity_in_bytes(FileInfos);
-
-  if (OverriddenFilesInfo)
-    size += llvm::capacity_in_bytes(OverriddenFilesInfo->OverriddenFiles);
 
   return size;
 }

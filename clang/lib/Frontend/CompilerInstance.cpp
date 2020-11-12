@@ -357,31 +357,6 @@ static void InitializeFileRemapping(DiagnosticsEngine &Diags,
           FromFile, std::unique_ptr<llvm::MemoryBuffer>(
                         const_cast<llvm::MemoryBuffer *>(RB.second)));
   }
-
-  // Remap files in the source manager (with other files).
-  for (const auto &RF : InitOpts.RemappedFiles) {
-    // Find the file that we're mapping to.
-    auto ToFile = FileMgr.getFile(RF.second);
-    if (!ToFile) {
-      Diags.Report(diag::err_fe_remap_missing_to_file) << RF.first << RF.second;
-      continue;
-    }
-
-    // Create the file entry for the file that we're mapping from.
-    const FileEntry *FromFile =
-        FileMgr.getVirtualFile(RF.first, (*ToFile)->getSize(), 0);
-    if (!FromFile) {
-      Diags.Report(diag::err_fe_remap_missing_from_file) << RF.first;
-      continue;
-    }
-
-    // Override the contents of the "from" file with the contents of
-    // the "to" file.
-    SourceMgr.overrideFileContents(FromFile, *ToFile);
-  }
-
-  SourceMgr.setOverridenFilesKeepOriginalName(
-      InitOpts.RemappedFilesKeepOriginalName);
 }
 
 // Preprocessor

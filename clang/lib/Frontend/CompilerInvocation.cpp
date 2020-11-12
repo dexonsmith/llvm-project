@@ -4057,11 +4057,27 @@ addVFSOverlays(const CompilerInvocation &CI, DiagnosticsEngine &Diags,
   return Result;
 }
 
+static IntrusiveRefCntPtr<llvm::vfs::FileSystem>
+addRemappedFiles(const CompilerInvocation &CI,
+                 IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
+  auto &PPOpts = CI.getPreprocessorOpts();
+  if (PPOpts.RemappedFiles.empty())
+    return BaseFS;
+
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> Result =
+      llvm::vfs::RedirectingFileSystem::create(
+          PPOpts.RemappedFiles,
+          /*UseExternalNames=*/!PPOpts.RemappedFilesKeepOriginalName, *BaseFS)
+          .release();
+  return Result;
+}
+
 IntrusiveRefCntPtr<llvm::vfs::FileSystem>
 clang::createVFSFromCompilerInvocation(
     const CompilerInvocation &CI, DiagnosticsEngine &Diags,
     IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS = std::move(BaseFS);
   FS = addVFSOverlays(CI, Diags, std::move(FS));
+  FS = addRemappedFiles(CI, std::move(FS));
   return FS;
 }
