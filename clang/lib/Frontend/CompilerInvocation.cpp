@@ -4028,10 +4028,9 @@ clang::createVFSFromCompilerInvocation(const CompilerInvocation &CI,
                                          llvm::vfs::getRealFileSystem());
 }
 
-IntrusiveRefCntPtr<llvm::vfs::FileSystem>
-clang::createVFSFromCompilerInvocation(
-    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
-    IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
+static IntrusiveRefCntPtr<llvm::vfs::FileSystem>
+addVFSOverlays(const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+               IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
   if (CI.getHeaderSearchOpts().VFSOverlayFiles.empty())
     return BaseFS;
 
@@ -4056,4 +4055,13 @@ clang::createVFSFromCompilerInvocation(
     Result = FS;
   }
   return Result;
+}
+
+IntrusiveRefCntPtr<llvm::vfs::FileSystem>
+clang::createVFSFromCompilerInvocation(
+    const CompilerInvocation &CI, DiagnosticsEngine &Diags,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS) {
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS = std::move(BaseFS);
+  FS = addVFSOverlays(CI, Diags, std::move(FS));
+  return FS;
 }
