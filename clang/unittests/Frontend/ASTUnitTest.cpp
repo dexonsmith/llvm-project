@@ -171,4 +171,56 @@ TEST_F(ASTUnitTest, LoadFromCommandLineEarlyError) {
   ASSERT_NE(ErrUnit->stored_diag_size(), 0U);
 }
 
+static IntrusiveRefCntPtr<llvm::vfs::FileSystem> getRemappedInputFileSystem() {
+  IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemoryFS =
+      new llvm::vfs::InMemoryFileSystem;
+  // Add files to filesystem.
+  InMemoryFS->addFile("//root/tu.cpp", 0, llvm::MemoryBuffer::getMemBuf(R"(
+const char *str = STR;
+int ge = zool;
+)"));
+  InMemoryFS->addFile("//root/include.h", 0, llvm::MemoryBuffer::getMemBuf(R"(
+#define STR "nexus"
+)"));
+
+  IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> OverlayFS =
+      new llvm::vfs::OverlayFileSystem(llvm::vfs::getRealFileSystem());
+  OverlayFS->pushOverlay(InMemoryFS);
+  return OverlayFS;
+}
+
+static std::unique_ptr<llvm::MemoryBuffer> getRemappedInputBuffer() {
+  return llvm::MemoryBuffer::getMemBuf(R"(
+#define STR          "nexus"
+
+int zool;
+)");
+}
+
+TEST_F(ASTUnitTest, LoadFromCommandLineDropsPCHWhenInputRemapped) {
+  // Create an "unsaved" buffer.
+
+  const char *Args[] = {"clang", "-target", "foobar", InputFileName.c_str()};
+
+  auto Diags = CompilerInstance::createDiagnostics(new DiagnosticOptions());
+  auto PCHContainerOps = std::make_shared<PCHContainerOperations>();
+  std::unique_ptr<clang::ASTUnit> ErrUnit;
+
+  ASTUnit *AST = ASTUnit::LoadFromCommandLine(
+      &Args[0], &Args[4], PCHContainerOps, Diags, "", false,
+      CaptureDiagsKind::All, None, 0, TU_Complete, false, false, false,
+      SkipFunctionBodiesScope::None, false, true, false, false, None, &ErrUnit);
+
+  ASSERT_EQ(AST, nullptr);
+  ASSERT_NE(ErrUnit, nullptr);
+  ASSERT_TRUE(Diags->hasErrorOccurred());
+  ASSERT_NE(ErrUnit->stored_diag_size(), 0U);
+}
+
+TEST_F(ASTUnitTest, ReparseDropsPCHWhenInputRemapped) {
+}
+
+TEST_F(ASTUnitTest, CodeCompleteDropsPCHWhenInputRemapped) {
+}
+
 } // anonymous namespace

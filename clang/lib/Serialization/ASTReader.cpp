@@ -2343,16 +2343,9 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
   SourceManager &SM = getSourceManager();
   // FIXME: Reject if the overrides are different.
   if ((!Overridden && !Transient) && SM.isFileOverridden(File)) {
-    if (Complain)
-      Error(diag::err_fe_pch_file_overridden, Filename);
-
-    // After emitting the diagnostic, bypass the overriding file to recover
-    // (this creates a separate FileEntry).
-    File = SM.bypassFileContentsOverride(*File);
-    if (!File) {
-      F.InputFilesLoaded[ID - 1] = InputFile::getNotFound();
-      return InputFile();
-    }
+    Error(diag::err_fe_pch_file_overridden, Filename);
+    F.InputFilesLoaded[ID - 1] = InputFile::getNotFound();
+    return InputFile();
   }
 
   enum ModificationType {

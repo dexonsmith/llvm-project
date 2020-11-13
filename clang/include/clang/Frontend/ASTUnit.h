@@ -889,6 +889,12 @@ public:
   ///
   /// \returns True if an error occurred, false otherwise.
   bool serialize(raw_ostream &OS);
+
+private:
+  static void adjustImplicitPCHIncludeForRemapping(
+      CompilerInvocation &Invocation,
+      IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
+      ArrayRef<ASTUnit::RemappedFile> RemappedFiles);
 };
 
 } // namespace clang

@@ -1779,6 +1779,7 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
       llvm::vfs::getRealFileSystem();
   VFS = createVFSFromCompilerInvocation(*CI, *Diags, VFS);
+  AST->adjustImplicitPCHIncludeForRemapping(*CI, VFS, RemappedFiles);
   AST->FileMgr = new FileManager(AST->FileSystemOpts, VFS);
   AST->ModuleCache = new InMemoryModuleCache;
   AST->OnlyLocalDecls = OnlyLocalDecls;
@@ -1832,6 +1833,7 @@ bool ASTUnit::Reparse(std::shared_ptr<PCHContainerOperations> PCHContainerOps,
   ParsingTimer.setOutput("Reparsing " + getMainFileName());
 
   // Remap files.
+  adjustImplicitPCHIncludeForRemapping(*Invocation, VFS, RemappedFiles);
   PreprocessorOptions &PPOpts = Invocation->getPreprocessorOpts();
   for (const auto &RB : PPOpts.RemappedFileBuffers)
     delete RB.second;
@@ -2219,6 +2221,8 @@ void ASTUnit::CodeComplete(
   SourceMgr = &Clang->getSourceManager();
 
   // Remap files.
+  adjustImplicitPCHIncludeForRemapping(Inv, &FileMgr->getVirtualFileSystem(),
+                                       RemappedFiles);
   PreprocessorOpts.clearRemappedFiles();
   PreprocessorOpts.RetainRemappedFileBuffers = true;
   for (const auto &RemappedFile : RemappedFiles) {
@@ -2711,3 +2715,107 @@ void ASTUnit::ConcurrencyState::start() {}
 void ASTUnit::ConcurrencyState::finish() {}
 
 #endif // NDEBUG
+
+void ASTUnit::adjustImplicitPCHIncludeForRemapping(
+    CompilerInvocation &Invocation,
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
+    ArrayRef<ASTUnit::RemappedFile> RemappedFiles) {
+  assert(VFS && "Expected a working filesystem");
+
+  auto &PPOpts = Invocation->getPreprocessorOpts();
+  if (PPOpts.ImplicitPCHInclude.empty())
+    return;
+
+  if (RemappedFiles.empty() && PPOpts.RemappedFiles.empty() &&
+      PPOpts.RemappedFileBuffers.empty())
+    return;
+
+  // Filter these files down to the ones that exist on disk.
+  FileManager FM(Invocation->getFileSystemOpts(), *VFS);
+  llvm::SmallDenseSet<const FileEntry *, 16> Remapped;
+  for (auto &RF : RemappedFiles)
+    if (auto F = FM.getOptionalFileRef(RF.first))
+      Remapped.insert(&F->getFileEntry());
+  for (auto &RF : PPOpts.RemappedFiles)
+    if (auto F = FM.getOptionalFileRef(RF.first))
+      Remapped.insert(&F->getFileEntry());
+  for (auto &RF : PPOpts.RemappedFileBuffers)
+    if (auto F = FM.getOptionalFileRef(RF.first))
+      Remapped.insert(&F->getFileEntry());
+
+  if (Remapped.empty())
+    return;
+
+  auto PCHFile = FM.getOptionalFileRef(PPOpts.ImplicitPCHInclude);
+  if (!PCHFile)
+    return; // Let the normal compilation logic deal with the missing PCH.
+
+  // We have remapped (unsaved) files and a PCH that's on disk. Need to check
+  // whether an input to the PCH has been remapped.
+  class InputChecker : public ASTReaderListener {
+  public:
+    bool needsInputFileVisitation() override { return true; }
+    bool needsImportVisitation() const override { return true; }
+    void visitImport(StringRef, StringRef Filename) override {
+      // Don't worry about imports that can't be found. Normal compilation
+      // logic can handle problems there.
+      if (auto F = FM.getOptionalFileRef(Filename))
+        ASTs.insert(&F->getFileEntry());
+    }
+    bool visitInputFile(StringRef Filename, bool isSystem, bool isOverridden,
+                        bool /*isExplicitModule*/) override {
+      // Assume we aren't overriding system includes with unsaved buffers.
+      if (isSystem)
+        return true;
+
+      // Overridden files come with their own buffers.
+      if (isOverridden)
+        return true;
+
+      auto F = FM.getOptionalFileRef(Filename);
+      if (!F || !Remapped.count(&F->getFileEntry()))
+        return true;
+
+      // We got a match.
+      ShouldDropPCH = true;
+      OverriddenInputFile = Filename;
+      return false;
+    }
+
+    bool run() {
+      for (int I = 0; I != ASTs.size() && !ShouldDropPCH; ++I)
+        if (readASTFileControlBlock(ASTs[I].getName(), FM, PCHContainerRdr,
+                                    /*FindModuleExtensions=*/false, *this,
+                                    /*ValidateDiagnosticOptions=*/false))
+          break;
+      return ShouldDropPCH;
+    }
+
+    InputChecker(FileManager &FM, FileEntryRef PCHFile,
+                 llvm::SmallDenseSet<const FileEntry *, 16> &Remapped)
+        : FM(FM), Remapped(Remapped) {
+      ASTs.insert(PCHFile);
+    }
+
+    bool ShouldDropPCH = false;
+    Optional<std::string> OverriddenInputFile;
+    llvm::SetVector<FileEntryRef> ASTs;
+
+    FileManager &FM;
+    llvm::SmallDenseSet<const FileEntry *, 16> &Remapped;
+  } Checker(FM, *PCHFile, Remapped);
+
+  // Note that ASTs.size() will grow as we accumulate ASTs.
+
+  if (!Checker.run())
+    return;
+
+  // Drop the -include-pch and replace it with an -include of the original file.
+  std::string OriginalSourceFile = ASTReader::getOriginalSourceFile(
+      ImplicitPCHInclude, FM, PCHContainerRdr, Diags);
+  Diags.Diag(remark_pch_file_bypassed)
+      << PPOpts.ImplicitPCHInclude << OriginalSourceFile
+      << *Checker.OverriddenInputFile;
+  PPOpts.Includes.insert(PPOpts.Includes.begin(), OriginalSourceFile)
+  PPOpts.ImplicitPCHInclude = std::string();
+}
