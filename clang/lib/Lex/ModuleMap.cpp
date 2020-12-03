@@ -175,8 +175,8 @@ Optional<FileEntryRef> ModuleMap::findHeader(
     Module *M, const Module::UnresolvedHeaderDirective &Header,
     SmallVectorImpl<char> &RelativePathName, bool &NeedsFramework) {
   // Search for the header file within the module's home directory.
-  auto *Directory = M->Directory;
-  SmallString<128> FullPathName(Directory->getName());
+  DirectoryEntryRef Directory = *M->Directory;
+  SmallString<128> FullPathName(Directory.getName());
 
   auto GetFile = [&](StringRef Filename) -> Optional<FileEntryRef> {
     auto File =
@@ -229,11 +229,11 @@ Optional<FileEntryRef> ModuleMap::findHeader(
   llvm::sys::path::append(FullPathName, RelativePathName);
   auto NormalHdrFile = GetFile(FullPathName);
 
-  if (!NormalHdrFile && Directory->getName().endswith(".framework")) {
+  if (!NormalHdrFile && Directory.getName().endswith(".framework")) {
     // The lack of 'framework' keyword in a module declaration it's a simple
     // mistake we can diagnose when the header exists within the proper
     // framework style path.
-    FullPathName.assign(Directory->getName());
+    FullPathName.assign(Directory.getName());
     RelativePathName.clear();
     if (GetFrameworkFile()) {
       Diags.Report(Header.FileNameLoc,
@@ -387,13 +387,13 @@ bool ModuleMap::isBuiltinHeader(StringRef FileName) {
            .Default(false);
 }
 
-bool ModuleMap::isBuiltinHeader(const FileEntry *File) {
-  return File->getDir() == BuiltinIncludeDir &&
-         ModuleMap::isBuiltinHeader(llvm::sys::path::filename(File->getName()));
+bool ModuleMap::isBuiltinHeader(FileEntryRef File) {
+  return File.getDir() == BuiltinIncludeDir &&
+         ModuleMap::isBuiltinHeader(llvm::sys::path::filename(File.getName()));
 }
 
 ModuleMap::HeadersMap::iterator
-ModuleMap::findKnownHeader(const FileEntry *File) {
+ModuleMap::findKnownHeader(FileEntryRef File) {
   resolveHeaderDirectives(File);
   HeadersMap::iterator Known = Headers.find(File);
   if (HeaderInfo.getHeaderSearchOpts().ImplicitModuleMaps &&
@@ -405,7 +405,7 @@ ModuleMap::findKnownHeader(const FileEntry *File) {
 }
 
 ModuleMap::KnownHeader
-ModuleMap::findHeaderInUmbrellaDirs(const FileEntry *File,
+ModuleMap::findHeaderInUmbrellaDirs(FileEntryRef File,
                     SmallVectorImpl<const DirectoryEntry *> &IntermediateDirs) {
   if (UmbrellaDirs.empty())
     return {};

@@ -2042,7 +2042,7 @@ Preprocessor::ImportAction Preprocessor::HandleHeaderIncludeOrImport(
   // Ask HeaderInfo if we should enter this #include file.  If not, #including
   // this file will have no effect.
   if (Action == Enter && File &&
-      !HeaderInfo.ShouldEnterIncludeFile(*this, &File->getFileEntry(),
+      !HeaderInfo.ShouldEnterIncludeFile(*this, *File,
                                          EnterOnce, getLangOpts().Modules,
                                          SuggestedModule.getModule())) {
     // Even if we've already preprocessed this header once and know that we
