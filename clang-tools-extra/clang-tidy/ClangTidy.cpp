@@ -242,7 +242,7 @@ private:
     if (FilePath.empty())
       return SourceLocation();
 
-    auto File = SourceMgr.getFileManager().getFile(FilePath);
+    auto File = SourceMgr.getFileManager().getOptionalFileRef(FilePath);
     if (!File)
       return SourceLocation();
 

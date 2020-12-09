@@ -147,7 +147,7 @@ int main(int argc, const char **argv) {
       for (auto I = ChangedFiles.begin(), E = ChangedFiles.end(); I != E; ++I) {
         OS << "  {\n";
         OS << "    \"FilePath\": \"" << *I << "\",\n";
-        const auto Entry = FileMgr.getFile(*I);
+        const auto Entry = FileMgr.getOptionalFileRef(*I);
         auto ID = Sources.getOrCreateFileID(*Entry, SrcMgr::C_User);
         std::string Content;
         llvm::raw_string_ostream ContentStream(Content);
@@ -165,7 +165,7 @@ int main(int argc, const char **argv) {
   }
 
   for (const auto &File : ChangedFiles) {
-    const auto Entry = FileMgr.getFile(File);
+    const auto Entry = FileMgr.getOptionalFileRef(File);
 
     auto ID = Sources.getOrCreateFileID(*Entry, SrcMgr::C_User);
     outs() << "============== " << File << " ==============\n";

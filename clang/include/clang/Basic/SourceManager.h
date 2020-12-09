@@ -845,6 +845,9 @@ public:
   ///
   /// The main file should be set prior to calling this function.
   bool isMainFile(const FileEntry &SourceFile);
+  bool isMainFile(FileEntryRef SourceFile) {
+    return isMainFile(SourceFile.getFileEntry());
+  }
 
   /// Set the file ID for the precompiled preamble.
   void setPreambleFileID(FileID Preamble) {
@@ -863,10 +866,6 @@ public:
   /// being \#included from the specified IncludePosition.
   ///
   /// This translates NULL into standard input.
-  FileID createFileID(const FileEntry *SourceFile, SourceLocation IncludePos,
-                      SrcMgr::CharacteristicKind FileCharacter,
-                      int LoadedID = 0, unsigned LoadedOffset = 0);
-
   FileID createFileID(FileEntryRef SourceFile, SourceLocation IncludePos,
                       SrcMgr::CharacteristicKind FileCharacter,
                       int LoadedID = 0, unsigned LoadedOffset = 0);
@@ -891,7 +890,7 @@ public:
 
   /// Get the FileID for \p SourceFile if it exists. Otherwise, create a
   /// new FileID for the \p SourceFile.
-  FileID getOrCreateFileID(const FileEntry *SourceFile,
+  FileID getOrCreateFileID(FileEntryRef SourceFile,
                            SrcMgr::CharacteristicKind FileCharacter);
 
   /// Return a new SourceLocation that encodes the

@@ -167,12 +167,12 @@ TEST_F(SourceManagerTest, locationPrintTest) {
   std::unique_ptr<llvm::MemoryBuffer> Buf =
       llvm::MemoryBuffer::getMemBuffer(Source);
 
-  const FileEntry *SourceFile =
-      FileMgr.getVirtualFile("/mainFile.cpp", Buf->getBufferSize(), 0);
+  FileEntryRef SourceFile =
+      FileMgr.getVirtualFileRef("/mainFile.cpp", Buf->getBufferSize(), 0);
   SourceMgr.overrideFileContents(SourceFile, std::move(Buf));
 
-  const FileEntry *HeaderFile =
-      FileMgr.getVirtualFile("/test-header.h", HeaderBuf->getBufferSize(), 0);
+  FileEntryRef HeaderFile =
+      FileMgr.getVirtualFileRef("/test-header.h", HeaderBuf->getBufferSize(), 0);
   SourceMgr.overrideFileContents(HeaderFile, std::move(HeaderBuf));
 
   FileID MainFileID = SourceMgr.getOrCreateFileID(SourceFile, SrcMgr::C_User);
@@ -496,8 +496,8 @@ TEST_F(SourceManagerTest, isMainFile) {
 
   std::unique_ptr<llvm::MemoryBuffer> Buf =
       llvm::MemoryBuffer::getMemBuffer(Source);
-  const FileEntry *SourceFile =
-      FileMgr.getVirtualFile("mainFile.cpp", Buf->getBufferSize(), 0);
+  FileEntryRef SourceFile =
+      FileMgr.getVirtualFileRef("mainFile.cpp", Buf->getBufferSize(), 0);
   SourceMgr.overrideFileContents(SourceFile, std::move(Buf));
 
   std::unique_ptr<llvm::MemoryBuffer> Buf2 =
@@ -509,8 +509,8 @@ TEST_F(SourceManagerTest, isMainFile) {
   FileID MainFileID = SourceMgr.getOrCreateFileID(SourceFile, SrcMgr::C_User);
   SourceMgr.setMainFileID(MainFileID);
 
-  EXPECT_TRUE(SourceMgr.isMainFile(*SourceFile));
-  EXPECT_TRUE(SourceMgr.isMainFile(*SourceFile));
+  EXPECT_TRUE(SourceMgr.isMainFile(SourceFile));
+  EXPECT_TRUE(SourceMgr.isMainFile(SourceFile));
   EXPECT_FALSE(SourceMgr.isMainFile(*SecondFile));
 }
 

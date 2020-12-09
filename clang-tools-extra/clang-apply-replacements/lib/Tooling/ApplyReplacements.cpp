@@ -136,11 +136,11 @@ std::error_code collectReplacementsFromDirectory(
 ///
 /// \returns A map mapping FileEntry to a set of Replacement targeting that
 /// file.
-static llvm::DenseMap<const FileEntry *, std::vector<tooling::Replacement>>
+static llvm::DenseMap<FileEntryRef, std::vector<tooling::Replacement>>
 groupReplacements(const TUReplacements &TUs, const TUDiagnostics &TUDs,
                   const clang::SourceManager &SM) {
   std::set<StringRef> Warned;
-  llvm::DenseMap<const FileEntry *, std::vector<tooling::Replacement>>
+  llvm::DenseMap<FileEntryRef, std::vector<tooling::Replacement>>
       GroupedReplacements;
 
   // Deduplicate identical replacements in diagnostics unless they are from the
@@ -155,7 +155,7 @@ groupReplacements(const TUReplacements &TUs, const TUDiagnostics &TUDs,
                         const tooling::TranslationUnitDiagnostics *SourceTU) {
     // Use the file manager to deduplicate paths. FileEntries are
     // automatically canonicalized.
-    if (auto Entry = SM.getFileManager().getFile(R.getFilePath())) {
+    if (auto Entry = SM.getFileManager().getOptionalFileRef(R.getFilePath())) {
       if (SourceTU) {
         auto &Replaces = DiagReplacements[*Entry];
         auto It = Replaces.find(R);
@@ -203,10 +203,10 @@ bool mergeAndDeduplicate(const TUReplacements &TUs, const TUDiagnostics &TUDs,
   // To report conflicting replacements on corresponding file, all replacements
   // are stored into 1 big AtomicChange.
   for (const auto &FileAndReplacements : GroupedReplacements) {
-    const FileEntry *Entry = FileAndReplacements.first;
+    FileEntryRef Entry = FileAndReplacements.first;
     const SourceLocation BeginLoc =
         SM.getLocForStartOfFile(SM.getOrCreateFileID(Entry, SrcMgr::C_User));
-    tooling::AtomicChange FileChange(Entry->getName(), Entry->getName());
+    tooling::AtomicChange FileChange(Entry.getName(), Entry.getName());
     for (const auto &R : FileAndReplacements.second) {
       llvm::Error Err =
           FileChange.replace(SM, BeginLoc.getLocWithOffset(R.getOffset()),

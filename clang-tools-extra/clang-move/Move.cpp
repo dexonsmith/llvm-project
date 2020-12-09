@@ -843,8 +843,9 @@ void ClangMoveTool::moveDeclsToNewFiles() {
 // Move all contents from OldFile to NewFile.
 void ClangMoveTool::moveAll(SourceManager &SM, StringRef OldFile,
                             StringRef NewFile) {
-  auto FE = SM.getFileManager().getFile(makeAbsolutePath(OldFile));
+  auto FE = SM.getFileManager().getFileRef(makeAbsolutePath(OldFile));
   if (!FE) {
+    llvm::consumeError(FE.takeError());
     llvm::errs() << "Failed to get file: " << OldFile << "\n";
     return;
   }
