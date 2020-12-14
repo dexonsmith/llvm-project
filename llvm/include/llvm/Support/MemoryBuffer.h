@@ -241,6 +241,9 @@ public:
   static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
   getFile(const Twine &Filename, int64_t FileSize = -1);
 
+  static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
+  getFile(sys::fs::file_t FD, const Twine &Filename, int64_t FileSize = -1);
+
   /// Map a subrange of the specified file as a ReadWriteMemoryBuffer.
   static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
   getFileSlice(const Twine &Filename, uint64_t MapSize, uint64_t Offset);

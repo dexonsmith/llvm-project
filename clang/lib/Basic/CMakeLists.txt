@@ -58,6 +58,7 @@ add_clang_library(clangBasic
   ObjCRuntime.cpp
   OpenMPKinds.cpp
   OperatorPrecedence.cpp
+  OutputManager.cpp
   SanitizerBlacklist.cpp
   SanitizerSpecialCaseList.cpp
   Sanitizers.cpp

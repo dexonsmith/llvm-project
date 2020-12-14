@@ -11,6 +11,7 @@
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/OutputManager.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/PCHContainerOperations.h"
@@ -84,6 +85,9 @@ class CompilerInstance : public ModuleLoader {
 
   /// The file manager.
   IntrusiveRefCntPtr<FileManager> FileMgr;
+
+  /// The output context.
+  Optional<OutputContext> Outputs;
 
   /// The source manager.
   IntrusiveRefCntPtr<SourceManager> SourceMgr;
@@ -406,6 +410,23 @@ public:
 
   /// Replace the current file manager and virtual file system.
   void setFileManager(FileManager *Value);
+
+  /// Use \p Context's output manager.
+  void createOutputContextFrom(const OutputContext &Context);
+
+  /// Create an output context from nothing.
+  void createOutputContext();
+
+  bool hasOutputContext() const { return bool(Outputs); }
+
+  OutputContext &getOutputContext() {
+    assert(hasOutputContext());
+    return *Outputs;
+  }
+
+  const OutputContext &getOutputContext() const {
+    return const_cast<CompilerInstance *>(this)->getOutputContext();
+  }
 
   /// }
   /// @name Source Manager
