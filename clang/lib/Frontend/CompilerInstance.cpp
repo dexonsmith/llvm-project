@@ -459,6 +459,10 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
     collectVFSEntries(*this, ModuleDepCollector);
   }
 
+  // Modules need an output manager.
+  if (!hasOutputManager())
+    createOutputManager();
+
   for (auto &Listener : DependencyCollectors)
     Listener->attachToPreprocessor(*PP);
 
@@ -645,29 +649,22 @@ void CompilerInstance::createSema(TranslationUnitKind TUKind,
 // Output Files
 
 void CompilerInstance::clearOutputFiles(bool EraseFiles) {
-  for (OutputFile &OF : OutputFiles) {
-    if (EraseFiles) {
-      if (!OF.TempFilename.empty()) {
-        llvm::sys::fs::remove(OF.TempFilename);
-        continue;
-      }
-      if (!OF.Filename.empty())
-        llvm::sys::fs::remove(OF.Filename);
-      continue;
-    }
-
-    if (OF.TempFilename.empty())
-      continue;
-
-    std::error_code EC = llvm::sys::fs::rename(OF.TempFilename, OF.Filename);
-    if (!EC)
-      continue;
-    getDiagnostics().Report(diag::err_unable_to_rename_temp)
-        << OF.TempFilename << OF.Filename << EC.message();
-
-    llvm::sys::fs::remove(OF.TempFilename);
+  if (!EraseFiles) {
+    for (auto &O : OutputFiles)
+      llvm::handleAllErrors(
+          O->close(),
+          [&](const llvm::OnDiskOutputRenameTempError &E) {
+            getDiagnostics().Report(diag::err_unable_to_rename_temp)
+                << E.getTempPath() << E.getOutputPath()
+                << E.getErrorCode().message();
+          },
+          [&](const llvm::OutputError &E) {
+            getDiagnostics().Report(diag::err_fe_unable_to_open_output)
+                << E.getOutputPath() << E.getErrorCode().message();
+          });
   }
   OutputFiles.clear();
+
   if (DeleteBuiltModules) {
     for (auto &Module : BuiltModules)
       llvm::sys::fs::remove(Module.second);
@@ -702,6 +699,71 @@ std::unique_ptr<raw_pwrite_stream> CompilerInstance::createNullOutputFile() {
   return std::make_unique<llvm::raw_null_ostream>();
 }
 
+void CompilerInstance::setOutputManager(
+    std::shared_ptr<llvm::OutputManager> NewOutputs) {
+  assert(!TheOutputManager && "Already has an output manager");
+  TheOutputManager = std::move(NewOutputs);
+}
+
+void CompilerInstance::createOutputManager() {
+  assert(!TheOutputManager && "Already has an output manager");
+  TheOutputManager = std::make_unique<llvm::OutputManager>();
+}
+
+llvm::OutputManager &CompilerInstance::getOutputManager() {
+  assert(TheOutputManager);
+  return *TheOutputManager;
+}
+
+llvm::OutputManager &CompilerInstance::getOrCreateOutputManager() {
+  if (!hasOutputManager())
+    createOutputManager();
+  return getOutputManager();
+}
+
+llvm::OutputBackend &
+CompilerInstance::getOrCreateImplicitModulesOutputBackend() {
+  using llvm::Error;
+  using llvm::OutputBackend;
+  using llvm::OutputConfig;
+  using llvm::OutputDestination;
+  class FileManagerOutputBackend : public OutputBackend {
+  public:
+    class Destination : public OutputDestination {
+    public:
+      Error storeContentImpl(ContentBuffer &Content) final {
+        (void)FM;
+        (void)Content;
+        // FIXME: FM.overrideContent(Content.getPath(), Content.takeBuffer());
+        return Error::success();
+      }
+
+      Destination(FileManager &FM, std::unique_ptr<OutputDestination> Next)
+          : OutputDestination(std::move(Next)), FM(FM) {}
+
+    private:
+      FileManager &FM;
+    };
+
+    Expected<std::unique_ptr<OutputDestination>>
+    createDestination(StringRef OutputPath, OutputConfig,
+                      std::unique_ptr<OutputDestination> NextDest) final {
+      return std::make_unique<Destination>(FM, std::move(NextDest));
+    }
+
+    FileManagerOutputBackend(FileManager &FM) : FM(FM) {}
+
+  private:
+    FileManager &FM;
+  };
+
+  if (!ImplicitModulesOutputBackend)
+    ImplicitModulesOutputBackend = makeMirroringOutputBackend(
+        &getOutputManager().getBackend(),
+        std::make_unique<FileManagerOutputBackend>(getFileManager()));
+  return *ImplicitModulesOutputBackend;
+}
+
 std::unique_ptr<raw_pwrite_stream>
 CompilerInstance::createOutputFile(StringRef OutputPath, bool Binary,
                                    bool RemoveFileOnSignal, bool UseTemporary,
@@ -733,88 +795,24 @@ CompilerInstance::createOutputFileImpl(StringRef OutputPath, bool Binary,
     OutputPath = *AbsPath;
   }
 
-  std::unique_ptr<llvm::raw_fd_ostream> OS;
-  Optional<StringRef> OSFile;
+  Expected<std::unique_ptr<llvm::Output>> O =
+      getOrCreateOutputManager().createOutput(
+          OutputPath,
+          llvm::PartialOutputConfig()
+              .set(llvm::ClientIntentOutputConfig::NeedsSeeking, Binary)
+              .set(llvm::OnDiskOutputConfig::OpenFlagText, !Binary)
+              .set(llvm::OnDiskOutputConfig::RemoveFileOnSignal,
+                   RemoveFileOnSignal)
+              .set(llvm::OnDiskOutputConfig::UseTemporary, UseTemporary)
+              .set(llvm::OnDiskOutputConfig::
+                       UseTemporaryCreateMissingDirectories,
+                   CreateMissingDirectories));
+  if (!O)
+    return O.takeError();
 
-  if (UseTemporary) {
-    if (OutputPath == "-")
-      UseTemporary = false;
-    else {
-      llvm::sys::fs::file_status Status;
-      llvm::sys::fs::status(OutputPath, Status);
-      if (llvm::sys::fs::exists(Status)) {
-        // Fail early if we can't write to the final destination.
-        if (!llvm::sys::fs::can_write(OutputPath))
-          return llvm::errorCodeToError(
-              make_error_code(llvm::errc::operation_not_permitted));
-
-        // Don't use a temporary if the output is a special file. This handles
-        // things like '-o /dev/null'
-        if (!llvm::sys::fs::is_regular_file(Status))
-          UseTemporary = false;
-      }
-    }
-  }
-
-  std::string TempFile;
-  if (UseTemporary) {
-    // Create a temporary file.
-    // Insert -%%%%%%%% before the extension (if any), and because some tools
-    // (noticeable, clang's own GlobalModuleIndex.cpp) glob for build
-    // artifacts, also append .tmp.
-    StringRef OutputExtension = llvm::sys::path::extension(OutputPath);
-    SmallString<128> TempPath =
-        StringRef(OutputPath).drop_back(OutputExtension.size());
-    TempPath += "-%%%%%%%%";
-    TempPath += OutputExtension;
-    TempPath += ".tmp";
-    int fd;
-    std::error_code EC =
-        llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
-
-    if (CreateMissingDirectories &&
-        EC == llvm::errc::no_such_file_or_directory) {
-      StringRef Parent = llvm::sys::path::parent_path(OutputPath);
-      EC = llvm::sys::fs::create_directories(Parent);
-      if (!EC) {
-        EC = llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
-      }
-    }
-
-    if (!EC) {
-      OS.reset(new llvm::raw_fd_ostream(fd, /*shouldClose=*/true));
-      OSFile = TempFile = std::string(TempPath.str());
-    }
-    // If we failed to create the temporary, fallback to writing to the file
-    // directly. This handles the corner case where we cannot write to the
-    // directory, but can write to the file.
-  }
-
-  if (!OS) {
-    OSFile = OutputPath;
-    std::error_code EC;
-    OS.reset(new llvm::raw_fd_ostream(
-        *OSFile, EC,
-        (Binary ? llvm::sys::fs::OF_None : llvm::sys::fs::OF_Text)));
-    if (EC)
-      return llvm::errorCodeToError(EC);
-  }
-
-  // Make sure the out stream file gets removed if we crash.
-  if (RemoveFileOnSignal)
-    llvm::sys::RemoveFileOnSignal(*OSFile);
-
-  // Add the output file -- but don't try to remove "-", since this means we are
-  // using stdin.
-  OutputFiles.emplace_back(((OutputPath != "-") ? OutputPath : "").str(),
-                           std::move(TempFile));
-
-  if (!Binary || OS->supportsSeeking())
-    return std::move(OS);
-
-  return std::make_unique<llvm::buffer_unique_ostream>(std::move(OS));
+  OutputFiles.push_back(std::move(*O));
+  return OutputFiles.back()->takeOS();
 }
-
 // Initialization Utilities
 
 bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input){
@@ -1114,6 +1112,17 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
     ImportingInstance.getSourceManager().getModuleBuildStack());
   SourceMgr.pushModuleBuildStack(ModuleName,
     FullSourceLoc(ImportLoc, ImportingInstance.getSourceManager()));
+
+  // Share an output manager.
+  assert(ImportingInstance.hasOutputManager() &&
+         "Expected an output manager to already be set up");
+  Instance.setOutputManager(ImportingInstance.getSharedOutputManager());
+  IntrusiveRefCntPtr<llvm::OutputBackend> ImplicitModulesOutputBackend =
+      &ImportingInstance.getOrCreateImplicitModulesOutputBackend();
+  Instance.setImplicitModulesOutputBackend(*ImplicitModulesOutputBackend);
+  llvm::ScopedOutputManagerBackend TempBackend(
+      ImportingInstance.getOutputManager(),
+      std::move(ImplicitModulesOutputBackend));
 
   // If we're collecting module dependencies, we need to share a collector
   // between all of the module CompilerInstances. Other than that, we don't

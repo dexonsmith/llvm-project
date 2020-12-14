@@ -245,6 +245,10 @@ public:
   static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
   getFileSlice(const Twine &Filename, uint64_t MapSize, uint64_t Offset);
 
+  /// Map the file at \p FD read-write.
+  static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
+  getOpenFile(sys::fs::file_t FD, const Twine &Filename, int64_t FileSize);
+
 private:
   // Hide these base class factory function so one can't write
   //   WritableMemoryBuffer::getXXX()
@@ -253,7 +257,6 @@ private:
   using MemoryBuffer::getFileOrSTDIN;
   using MemoryBuffer::getMemBuffer;
   using MemoryBuffer::getMemBufferCopy;
-  using MemoryBuffer::getOpenFile;
   using MemoryBuffer::getOpenFileSlice;
   using MemoryBuffer::getSTDIN;
 };

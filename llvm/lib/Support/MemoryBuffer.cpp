@@ -375,14 +375,8 @@ static bool shouldUseMmap(sys::fs::file_t FD,
 }
 
 static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
-getReadWriteFile(const Twine &Filename, uint64_t FileSize, uint64_t MapSize,
-                 uint64_t Offset) {
-  Expected<sys::fs::file_t> FDOrErr = sys::fs::openNativeFileForReadWrite(
-      Filename, sys::fs::CD_OpenExisting, sys::fs::OF_None);
-  if (!FDOrErr)
-    return errorToErrorCode(FDOrErr.takeError());
-  sys::fs::file_t FD = *FDOrErr;
-
+getReadWriteFile(sys::fs::file_t FD, const Twine &Filename, uint64_t FileSize,
+                 uint64_t MapSize, uint64_t Offset) {
   // Default is to map the full file.
   if (MapSize == uint64_t(-1)) {
     // If we don't know the file size, use fstat to find out.  fstat on an open
@@ -413,6 +407,22 @@ getReadWriteFile(const Twine &Filename, uint64_t FileSize, uint64_t MapSize,
   if (EC)
     return EC;
   return std::move(Result);
+}
+
+static ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
+getReadWriteFile(const Twine &Filename, uint64_t FileSize, uint64_t MapSize,
+                 uint64_t Offset) {
+  Expected<sys::fs::file_t> FDOrErr = sys::fs::openNativeFileForReadWrite(
+      Filename, sys::fs::CD_OpenExisting, sys::fs::OF_None);
+  if (!FDOrErr)
+    return errorToErrorCode(FDOrErr.takeError());
+  return getReadWriteFile(*FDOrErr, Filename, FileSize, MapSize, Offset);
+}
+
+ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
+WriteThroughMemoryBuffer::getOpenFile(sys::fs::file_t FD, const Twine &Filename,
+                                      int64_t FileSize) {
+  return getReadWriteFile(FD, Filename, FileSize, FileSize, 0);
 }
 
 ErrorOr<std::unique_ptr<WriteThroughMemoryBuffer>>
