@@ -659,11 +659,7 @@ void CompilerInstance::clearOutputFiles(bool EraseFiles) {
     if (OF.TempFilename.empty())
       continue;
 
-    // If '-working-directory' was passed, the output filename should be
-    // relative to that.
-    SmallString<128> NewOutFile(OF.Filename);
-    FileMgr->FixupRelativePath(NewOutFile);
-    std::error_code EC = llvm::sys::fs::rename(OF.TempFilename, NewOutFile);
+    std::error_code EC = llvm::sys::fs::rename(OF.TempFilename, OF.Filename);
     if (!EC)
       continue;
     getDiagnostics().Report(diag::err_unable_to_rename_temp)
@@ -727,6 +723,15 @@ CompilerInstance::createOutputFileImpl(StringRef OutputPath, bool Binary,
                                        bool CreateMissingDirectories) {
   assert((!CreateMissingDirectories || UseTemporary) &&
          "CreateMissingDirectories is only allowed when using temporary files");
+
+  // If '-working-directory' was passed, the output filename should be
+  // relative to that.
+  Optional<SmallString<128>> AbsPath;
+  if (!llvm::sys::path::is_absolute(OutputPath)) {
+    AbsPath.emplace(OutputPath);
+    FileMgr->FixupRelativePath(*AbsPath);
+    OutputPath = *AbsPath;
+  }
 
   std::unique_ptr<llvm::raw_fd_ostream> OS;
   Optional<StringRef> OSFile;
