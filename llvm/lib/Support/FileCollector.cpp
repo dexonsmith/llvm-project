@@ -86,7 +86,11 @@ void FileCollector::addFileImpl(StringRef SrcPath) {
   sys::path::native(AbsoluteSrc);
 
   // Remove redundant leading "./" pieces and consecutive separators.
-  AbsoluteSrc = sys::path::remove_leading_dotslash(AbsoluteSrc);
+  {
+    StringRef DroppedDotSlash = sys::path::remove_leading_dotslash(AbsoluteSrc);
+    if (DroppedDotSlash.begin() != AbsoluteSrc.begin())
+      AbsoluteSrc.erase(AbsoluteSrc.begin(), DroppedDotSlash.begin());
+  }
 
   // Canonicalize the source path by removing "..", "." components.
   SmallString<256> VirtualPath = AbsoluteSrc;
