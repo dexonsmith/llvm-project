@@ -121,16 +121,62 @@ FileSystem::getBufferForFile(const llvm::Twine &Name, int64_t FileSize,
   return (*F)->getBuffer(Name, FileSize, RequiresNullTerminator, IsVolatile);
 }
 
+bool FileSystem::isAbsoluteGeneric(const Twine &Path) {
+  // Get a StringRef first, or else both calls to is_absolute will need to
+  // flatten the same Twine.
+  SmallString<128> Storage;
+  StringRef Str = Path.toStringRef(Storage);
+  return llvm::sys::path::is_absolute(Str, llvm::sys::path::Style::posix) ||
+         llvm::sys::path::is_absolute(Str, llvm::sys::path::Style::windows);
+}
+
+void FileSystem::makeAbsoluteGeneric(const Twine &WorkingDirectory,
+                                     SmallVectorImpl<char> &Path) {
+  if (isAbsoluteGeneric(Path))
+    return;
+
+  // Start constructing an absolute path.
+  SmallString<128> AbsPath;
+  WorkingDirectory.toVector(AbsPath);
+
+  // If the working directory is empty, just return the relative path.
+  if (AbsPath.empty())
+    return;
+
+  // Auto-detect the style from the working directory. Assume native if we
+  // can't figure it out.
+  sys::path::Style style = sys::path::Style::native;
+  if (sys::path::is_absolute(AbsPath, sys::path::Style::posix))
+    style = sys::path::Style::posix;
+  else if (sys::path::is_absolute(AbsPath, sys::path::Style::windows))
+    style = sys::path::Style::windows;
+
+  if (!AbsPath.endswith(sys::path::get_separator(style)))
+    AbsPath.append(sys::path::get_separator(style));
+  AbsPath.append(Path.begin(), Path.end());
+  Path = std::move(AbsPath);
+}
+
 std::error_code FileSystem::makeAbsolute(SmallVectorImpl<char> &Path) const {
-  if (llvm::sys::path::is_absolute(Path))
-    return {};
+  if (isAbsoluteGeneric(Path))
+    return std::error_code();
 
   auto WorkingDir = getCurrentWorkingDirectory();
   if (!WorkingDir)
     return WorkingDir.getError();
 
-  llvm::sys::fs::make_absolute(WorkingDir.get(), Path);
-  return {};
+  makeAbsoluteGeneric(*WorkingDir, Path);
+  return std::error_code();
+}
+
+ErrorOr<StringRef>
+FileSystem::getAbsolute(const Twine &Path,
+                        SmallVectorImpl<char> &Storage) const {
+  if (isAbsoluteGeneric(Path))
+    return Path.toStringRef(Storage);
+  Path.toVector(Storage);
+  makeAbsolute(Storage);
+  return StringRef(Storage.begin(), Storage.size());
 }
 
 std::error_code FileSystem::getRealPath(const Twine &Path,
@@ -1092,35 +1138,6 @@ RedirectingFileSystem::setCurrentWorkingDirectory(const Twine &Path) {
 std::error_code RedirectingFileSystem::isLocal(const Twine &Path,
                                                bool &Result) {
   return ExternalFS->isLocal(Path, Result);
-}
-
-std::error_code RedirectingFileSystem::makeAbsolute(SmallVectorImpl<char> &Path) const {
-  if (llvm::sys::path::is_absolute(Path, llvm::sys::path::Style::posix) ||
-      llvm::sys::path::is_absolute(Path, llvm::sys::path::Style::windows))
-    return {};
-
-  auto WorkingDir = getCurrentWorkingDirectory();
-  if (!WorkingDir)
-    return WorkingDir.getError();
-
-  // We can't use sys::fs::make_absolute because that assumes the path style
-  // is native and there is no way to override that.  Since we know WorkingDir
-  // is absolute, we can use it to determine which style we actually have and
-  // append Path ourselves.
-  sys::path::Style style = sys::path::Style::windows;
-  if (sys::path::is_absolute(WorkingDir.get(), sys::path::Style::posix)) {
-    style = sys::path::Style::posix;
-  }
-
-  std::string Result = WorkingDir.get();
-  StringRef Dir(Result);
-  if (!Dir.endswith(sys::path::get_separator(style))) {
-    Result += sys::path::get_separator(style);
-  }
-  Result.append(Path.data(), Path.size());
-  Path.assign(Result.begin(), Result.end());
-
-  return {};
 }
 
 directory_iterator RedirectingFileSystem::dir_begin(const Twine &Dir,

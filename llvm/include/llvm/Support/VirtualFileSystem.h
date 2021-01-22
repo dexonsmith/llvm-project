@@ -295,6 +295,23 @@ public:
   /// \returns success if \a path has been made absolute, otherwise a
   ///          platform-specific error_code.
   virtual std::error_code makeAbsolute(SmallVectorImpl<char> &Path) const;
+
+  /// Get the absolute path for \p Path as a StringRef, only using \p Storage
+  /// when necessary.
+  ErrorOr<StringRef> getAbsolute(const Twine &Path,
+                                 SmallVectorImpl<char> &Storage) const;
+
+  /// Generic version of \a sys::path::is_absolute() that returns true if \p
+  /// Path is absolute in either posix or windows style.
+  static bool isAbsoluteGeneric(const Twine &Path);
+
+  /// Generic version of \a sys::path::make_absolute() that detects whether \p
+  /// WorkingDirectory is posix or windows style, and uses the detected style
+  /// to make \p Path absolute.
+  ///
+  /// This has no effect if \p Path returns true for \a isAbsoluteGeneric().
+  static void makeAbsoluteGeneric(const Twine &WorkingDirectory,
+                                  SmallVectorImpl<char> &Path);
 };
 
 /// Gets an \p vfs::FileSystem for the 'real' file system, as seen by
@@ -747,8 +764,6 @@ public:
   std::error_code setCurrentWorkingDirectory(const Twine &Path) override;
 
   std::error_code isLocal(const Twine &Path, bool &Result) override;
-
-  std::error_code makeAbsolute(SmallVectorImpl<char> &Path) const override;
 
   directory_iterator dir_begin(const Twine &Dir, std::error_code &EC) override;
 

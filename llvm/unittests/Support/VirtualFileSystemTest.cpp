@@ -21,6 +21,7 @@
 #include <string>
 
 using namespace llvm;
+using namespace llvm::vfs;
 using llvm::sys::fs::UniqueID;
 using llvm::unittest::TempDir;
 using llvm::unittest::TempFile;
@@ -696,6 +697,70 @@ TEST(VirtualFileSystemTest, BrokenSymlinkRealFSRecursiveIteration) {
                                    _ddd.path().str()));
 }
 #endif
+
+TEST(VirtualFileSystemTest, getAbsoluteWindows) {
+  // Test a windows-style working directory.
+  auto FS = makeIntrusiveRefCnt<InMemoryFileSystem>();
+  for (StringRef WD : {"C:\\dir", "C:\\dir\\"}) {
+    FS->setCurrentWorkingDirectory(WD);
+    {
+      // Normal StringRef.
+      SmallString<128> Storage;
+      EXPECT_EQ("C:\\dir\\a\\b", *FS->getAbsolute("a\\b", Storage));
+      EXPECT_FALSE(Storage.empty());
+    }
+    {
+      // Normal StringRef that's absolute.
+      SmallString<128> Storage;
+      EXPECT_EQ("C:\\dir\\a\\b", *FS->getAbsolute("C:\\dir\\a\\b", Storage));
+      EXPECT_TRUE(Storage.empty());
+    }
+    {
+      // A non-trivial Twine.
+      SmallString<128> Storage;
+      EXPECT_EQ("C:\\dir\\a\\b", *FS->getAbsolute(Twine("a\\") + "b", Storage));
+      EXPECT_FALSE(Storage.empty());
+    }
+    {
+      // A non-trivial Twine that's absolute.
+      SmallString<128> Storage;
+      EXPECT_EQ("C:\\dir\\a\\b",
+                *FS->getAbsolute(Twine("C:\\dir\\") + "a\\b", Storage));
+      EXPECT_FALSE(Storage.empty());
+    }
+  }
+}
+
+TEST(VirtualFileSystemTest, getAbsolutePosix) {
+  auto FS = makeIntrusiveRefCnt<InMemoryFileSystem>();
+  for (StringRef WD : {"/dir", "/dir/"}) {
+    FS->setCurrentWorkingDirectory(WD);
+    {
+      // Normal StringRef.
+      SmallString<128> Storage;
+      EXPECT_EQ("/dir/a/b", *FS->getAbsolute("a/b", Storage));
+      EXPECT_FALSE(Storage.empty());
+    }
+    {
+      // Normal StringRef that's absolute.
+      SmallString<128> Storage;
+      EXPECT_EQ("/dir/a/b", *FS->getAbsolute("/dir/a/b", Storage));
+      EXPECT_TRUE(Storage.empty());
+    }
+    {
+      // A non-trivial Twine.
+      SmallString<128> Storage;
+      EXPECT_EQ("/dir/a/b", *FS->getAbsolute(Twine("a/") + "b", Storage));
+      EXPECT_FALSE(Storage.empty());
+    }
+    {
+      // A non-trivial Twine that's absolute.
+      SmallString<128> Storage;
+      EXPECT_EQ("/dir/a/b", *FS->getAbsolute(Twine("/dir/") + "a/b", Storage));
+      EXPECT_FALSE(Storage.empty());
+    }
+  }
+}
 
 template <typename DirIter>
 static void checkContents(DirIter I, ArrayRef<StringRef> ExpectedOut) {
