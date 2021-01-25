@@ -9,6 +9,7 @@
 #include "OptEmitter.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Record.h"
@@ -424,18 +425,49 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
   array_pod_sort(OptsWithMarshalling.begin(), OptsWithMarshalling.end(),
                  CmpMarshallingOpts);
 
+  StringSet<> KnownMarshallingPrefixes;
+  SmallVector<StringRef> MarshallingPrefixes;
   std::vector<MarshallingInfo> MarshallingInfos;
-  for (const auto *R : OptsWithMarshalling)
+  for (const auto *R : OptsWithMarshalling) {
     MarshallingInfos.push_back(createMarshallingInfo(*R));
+    auto Prefix =
+        KnownMarshallingPrefixes.insert(MarshallingInfos.back().MacroPrefix);
+    if (!Prefix.second)
+      continue;
+    MarshallingPrefixes.push_back(Prefix.first->first());
+  }
 
-  for (const auto &MI : MarshallingInfos) {
-    OS << "#ifdef " << MI.getMacroName() << "\n";
-    OS << MI.getMacroName() << "(";
-    WriteOptRecordFields(OS, MI.R);
-    OS << ", ";
-    MI.emit(OS);
-    OS << ")\n";
-    OS << "#endif // " << MI.getMacroName() << "\n";
+  if (!MarshallingInfos.empty()) {
+    // Skip the full block of marshalling macros en masse.
+    assert(!MarshallingPrefixes.empty());
+    SmallString<128> AllMacros = {MarshallingPrefixes.front(),
+                                  MarshallingInfo::MacroName};
+    for (StringRef Prefix : drop_begin(MarshallingPrefixes))
+      AllMacros.append({" || ", Prefix, MarshallingInfo::MacroName});
+    OS << "#ifdef " << AllMacros << "\n";
+
+    // Skip runs of marshalling macros en masse.
+    Optional<StringRef> CurrentPrefix;
+    auto setCurrentMacroPrefix = [&](Optional<StringRef> Prefix) {
+      if (Prefix == CurrentPrefix)
+        return;
+      if (CurrentPrefix)
+        OS << "#endif // " << *CurrentPrefix << MarshallingInfo::MacroName
+           << "\n";
+      if (Prefix)
+        OS << "#ifdef " << *Prefix << MarshallingInfo::MacroName << "\n";
+      CurrentPrefix = Prefix;
+    };
+    for (const auto &MI : MarshallingInfos) {
+      setCurrentMacroPrefix(MI.MacroPrefix);
+      OS << MI.getMacroName() << "(";
+      WriteOptRecordFields(OS, MI.R);
+      OS << ", ";
+      MI.emit(OS);
+      OS << ")\n";
+    }
+    setCurrentMacroPrefix(None);
+    OS << "#endif // " << AllMacros << "\n";
   }
 
   OS << "\n";
