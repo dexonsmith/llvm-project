@@ -90,6 +90,9 @@ class CompilerInstance : public ModuleLoader {
   /// The output context.
   std::shared_ptr<llvm::vfs::OutputManager> TheOutputManager;
 
+  /// The output backend to use for implicit modules.
+  IntrusiveRefCntPtr<llvm::vfs::OutputBackend> ImplicitModulesOutputBackend;
+
   /// The source manager.
   IntrusiveRefCntPtr<SourceManager> SourceMgr;
 
@@ -411,6 +414,16 @@ public:
   }
   llvm::vfs::OutputManager &getOutputManager();
   llvm::vfs::OutputManager &getOrCreateOutputManager();
+
+  llvm::vfs::OutputBackend &getImplicitModulesOutputBackend() {
+    return *ImplicitModulesOutputBackend;
+  }
+
+  void setImplicitModulesOutputBackend(llvm::vfs::OutputBackend &Backend) {
+    ImplicitModulesOutputBackend = &Backend;
+  }
+
+  llvm::vfs::OutputBackend &getOrCreateImplicitModulesOutputBackend();
 
   /// }
   /// @name Source Manager

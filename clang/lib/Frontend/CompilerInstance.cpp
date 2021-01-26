@@ -722,6 +722,47 @@ llvm::vfs::OutputManager &CompilerInstance::getOrCreateOutputManager() {
   return getOutputManager();
 }
 
+llvm::vfs::OutputBackend &
+CompilerInstance::getOrCreateImplicitModulesOutputBackend() {
+  using llvm::Error;
+  using llvm::vfs::OutputBackend;
+  using llvm::vfs::OutputConfig;
+  using llvm::vfs::OutputDestination;
+  class FileManagerOutputBackend : public OutputBackend {
+  public:
+    class Destination : public OutputDestination {
+    public:
+      Error storeContentImpl(ContentBuffer &Content) final {
+        FM.getVirtualFileWithContent(Content.getPath(), Content.takeBuffer());
+        return Error::success();
+      }
+
+      Destination(FileManager &FM, std::unique_ptr<OutputDestination> Next)
+          : OutputDestination(std::move(Next)), FM(FM) {}
+
+    private:
+      FileManager &FM;
+    };
+
+    Expected<std::unique_ptr<OutputDestination>>
+    createDestination(StringRef OutputPath, OutputConfig,
+                      std::unique_ptr<OutputDestination> NextDest) final {
+      return std::make_unique<Destination>(FM, std::move(NextDest));
+    }
+
+    FileManagerOutputBackend(FileManager &FM) : FM(FM) {}
+
+  private:
+    FileManager &FM;
+  };
+
+  if (!ImplicitModulesOutputBackend)
+    ImplicitModulesOutputBackend = makeMirroringOutputBackend(
+        &getOutputManager().getBackend(),
+        std::make_unique<FileManagerOutputBackend>(getFileManager()));
+  return *ImplicitModulesOutputBackend;
+}
+
 std::unique_ptr<raw_pwrite_stream>
 CompilerInstance::createOutputFile(StringRef OutputPath, bool Binary,
                                    bool RemoveFileOnSignal, bool UseTemporary,
@@ -1074,6 +1115,12 @@ compileModuleImpl(CompilerInstance &ImportingInstance, SourceLocation ImportLoc,
   assert(ImportingInstance.hasOutputManager() &&
          "Expected an output manager to already be set up");
   Instance.setOutputManager(ImportingInstance.getSharedOutputManager());
+  IntrusiveRefCntPtr<llvm::vfs::OutputBackend> ImplicitModulesOutputBackend =
+      &ImportingInstance.getOrCreateImplicitModulesOutputBackend();
+  Instance.setImplicitModulesOutputBackend(*ImplicitModulesOutputBackend);
+  llvm::vfs::ScopedOutputManagerBackend TempBackend(
+      ImportingInstance.getOutputManager(),
+      std::move(ImplicitModulesOutputBackend));
 
   // If we're collecting module dependencies, we need to share a collector
   // between all of the module CompilerInstances. Other than that, we don't
