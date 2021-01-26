@@ -349,10 +349,8 @@ llvm::Expected<FileEntryRef> FileManager::getSTDIN() {
   else
     return llvm::errorCodeToError(ContentOrError.getError());
 
-  STDIN = getVirtualFileRef(Content->getBufferIdentifier(),
-                            Content->getBufferSize(), 0);
+  STDIN = getVirtualFileWithContent(std::move(Content), 0);
   FileEntry &FE = const_cast<FileEntry &>(STDIN->getFileEntry());
-  FE.Content = std::move(Content);
   FE.IsNamedPipe = true;
   return *STDIN;
 }
@@ -433,6 +431,45 @@ FileEntryRef FileManager::getVirtualFileRef(StringRef Filename, off_t Size,
   UFE->IsValid = true;
   UFE->File.reset();
   return FileEntryRef(NamedFileEnt);
+}
+
+FileEntryRef FileManager::getVirtualFileWithContent(
+    std::unique_ptr<llvm::MemoryBuffer> Content, time_t ModificationTime) {
+  return getVirtualFileWithContent(Content->getBufferIdentifier(),
+                                   std::move(Content), ModificationTime);
+}
+
+FileEntryRef FileManager::getVirtualFileWithContent(
+    StringRef Filename, std::unique_ptr<llvm::MemoryBuffer> Content,
+    time_t ModificationTime) {
+  FileEntryRef File =
+      getVirtualFileRef(Filename, Content->getBufferSize(), ModificationTime);
+  overrideContent(File.getFileEntry(), std::move(Content), ModificationTime);
+  return File;
+}
+
+FileEntryRef
+FileManager::getVirtualFileWithContent(llvm::MemoryBufferRef Content,
+                                       time_t ModificationTime) {
+  return getVirtualFileWithContent(Content.getBufferIdentifier(),
+                                   llvm::MemoryBuffer::getMemBuffer(Content),
+                                   ModificationTime);
+}
+
+void FileManager::overrideContent(const FileEntry &FE_,
+                                  std::unique_ptr<llvm::MemoryBuffer> Content,
+                                  time_t ModificationTime) {
+  FileEntry &FE = const_cast<FileEntry &>(FE_);
+  FE.Size = Content->getBufferSize();
+  FE.ModTime = ModificationTime;
+  FE.Content = std::move(Content);
+}
+
+void FileManager::overrideContent(const FileEntry &FE,
+                                  llvm::MemoryBufferRef Content,
+                                  time_t ModificationTime) {
+  overrideContent(FE, llvm::MemoryBuffer::getMemBuffer(Content),
+                  ModificationTime);
 }
 
 llvm::Optional<FileEntryRef> FileManager::getBypassFile(FileEntryRef VF) {
@@ -527,6 +564,16 @@ FileManager::getBufferForFile(const FileEntry *Entry, bool isVolatile,
   // Otherwise, open the file.
   return getBufferForFileImpl(Filename, FileSize, isVolatile,
                               RequiresNullTerminator);
+}
+
+llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
+FileManager::getBufferForFile(StringRef Filename, bool IsVolatile,
+                              bool RequiresNullTerminator) {
+  llvm::Expected<FileEntryRef> File = getFileRef(Filename);
+  if (!File)
+    return errorToErrorCode(File.takeError());
+  return getBufferForFile(&File->getFileEntry(), IsVolatile,
+                          RequiresNullTerminator);
 }
 
 llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>

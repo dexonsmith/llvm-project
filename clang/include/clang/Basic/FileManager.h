@@ -27,6 +27,7 @@
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include <ctime>
 #include <map>
@@ -256,6 +257,50 @@ public:
   const FileEntry *getVirtualFile(StringRef Filename, off_t Size,
                                   time_t ModificationTime);
 
+  /// Lookup the current file entry for \c Content->getBufferIdentifier(), or
+  /// create a new virtual one, and replace its file content with \p Content.
+  ///
+  /// This is equivalent to \a getVirtualFileRef() followed by \a
+  /// overrideContent().
+  FileEntryRef
+  getVirtualFileWithContent(std::unique_ptr<llvm::MemoryBuffer> Content,
+                            time_t ModificationTime = 0);
+
+  /// Lookup the current file entry for \c Filename, or create a new virtual
+  /// one, and replace its file content with \p Content.
+  ///
+  /// This is equivalent to \a getVirtualFileRef() followed by \a
+  /// overrideContent().
+  FileEntryRef
+  getVirtualFileWithContent(StringRef Filename,
+                            std::unique_ptr<llvm::MemoryBuffer> Content,
+                            time_t ModificationTime = 0);
+
+  /// Lookup the current file entry for \c Content.getBufferIdentifier(), or
+  /// create a new virtual one, and replace its file content with \p Content.
+  ///
+  /// This is equivalent to \a getVirtualFileRef() followed by \a
+  /// overrideContent().
+  FileEntryRef getVirtualFileWithContent(llvm::MemoryBufferRef Content,
+                                         time_t ModificationTime = 0);
+
+  /// Override \p FE with \a Content.
+  ///
+  /// \post Calls to \a getBufferForFile() return a reference to \p Content.
+  /// \post FE.getSize() returns \c Content->getBufferSize().
+  /// \post FE.getModificationTime() returns \p ModificationTime.
+  void overrideContent(const FileEntry &FE,
+                       std::unique_ptr<llvm::MemoryBuffer> Content,
+                       time_t ModificationTime = 0);
+
+  /// Override \p FE with \a Content.
+  ///
+  /// \post Calls to \a getBufferForFile() return a reference to \p Content.
+  /// \post FE.getSize() returns \c Content->getBufferSize().
+  /// \post FE.getModificationTime() returns \p ModificationTime.
+  void overrideContent(const FileEntry &FE, llvm::MemoryBufferRef Content,
+                       time_t ModificationTime = 0);
+
   /// Retrieve a FileEntry that bypasses VFE, which is expected to be a virtual
   /// file entry, to access the real file.  The returned FileEntry will have
   /// the same filename as FE but a different identity and its own stat.
@@ -271,12 +316,12 @@ public:
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBufferForFile(const FileEntry *Entry, bool isVolatile = false,
                    bool RequiresNullTerminator = true);
+
+  /// Creates a file entry and looks up the content. To bypass the FileManager,
+  /// call \a FileSystem::getBufferFromFile() in the VFS.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBufferForFile(StringRef Filename, bool isVolatile = false,
-                   bool RequiresNullTerminator = true) {
-    return getBufferForFileImpl(Filename, /*FileSize=*/-1, isVolatile,
-                                RequiresNullTerminator);
-  }
+                   bool RequiresNullTerminator = true);
 
 private:
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>

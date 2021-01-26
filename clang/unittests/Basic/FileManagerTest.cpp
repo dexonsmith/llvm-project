@@ -583,4 +583,48 @@ TEST_F(FileManagerTest, getBypassFile) {
       &expectedToOptional(Manager.getFileRef("/tmp/test"))->getFileEntry());
 }
 
+template <class T>
+std::unique_ptr<T> errorOrToPointer(ErrorOr<std::unique_ptr<T>> ErrorOrT) {
+  if (ErrorOrT)
+    return std::move(*ErrorOrT);
+  return nullptr;
+}
+
+TEST_F(FileManagerTest, getVirtualFileWithContent) {
+  SmallString<64> CustomWorkingDir;
+#ifdef _WIN32
+  CustomWorkingDir = "C:/";
+#else
+  CustomWorkingDir = "/";
+#endif
+
+  auto FS = IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem>(
+      new llvm::vfs::InMemoryFileSystem);
+  // setCurrentworkingdirectory must finish without error.
+  ASSERT_TRUE(!FS->setCurrentWorkingDirectory(CustomWorkingDir));
+
+  FileSystemOptions Opts;
+  FileManager Manager(Opts, FS);
+
+  llvm::MemoryBufferRef Content("content", "/tmp/test");
+  ASSERT_EQ("/tmp/test", Content.getBufferIdentifier());
+  ASSERT_EQ("content", Content.getBuffer());
+
+  FileEntryRef F = Manager.getVirtualFileWithContent(Content);
+
+  // Get two buffers for F, one directly and one via filename. Both should be
+  // references to Content.
+  std::unique_ptr<llvm::MemoryBuffer> B1 =
+      errorOrToPointer(Manager.getBufferForFile(&F.getFileEntry()));
+  ASSERT_TRUE(B1);
+  std::unique_ptr<llvm::MemoryBuffer> B2 =
+      errorOrToPointer(Manager.getBufferForFile(Content.getBufferIdentifier()));
+  ASSERT_TRUE(B2);
+  for (llvm::MemoryBuffer *B : {B1.get(), B2.get()}) {
+    EXPECT_EQ("/tmp/test", B->getBufferIdentifier());
+    EXPECT_EQ("content", B->getBuffer());
+    EXPECT_EQ(Content.getBufferStart(), B->getBufferStart());
+  }
+}
+
 } // anonymous namespace
