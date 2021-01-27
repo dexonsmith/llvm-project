@@ -23,11 +23,14 @@ namespace vfs {
 
 /// Set of advisory flags for backends. By default, all flags are off.
 enum class OutputConfigFlag {
+  /// Files should be opened in text mode.
+  Text,
+
   /// Files should be opened in text mode. Backends modelling a Windows
   /// filesystem should translate newlines to carriage returns and line feeds.
   ///
-  /// Seeking is not supported for text outputs.
-  Text,
+  /// Seeking is not supported.
+  TextWithCRLF,
 
   /// Advise that other processes are likely to *modify* this output after it
   /// has been written (as opposed to replacing it atomically); for example, if
