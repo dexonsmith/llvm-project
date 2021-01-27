@@ -96,4 +96,46 @@ TEST(IntrusiveRefCntPtr, UsesTraitsToRetainAndRelease) {
   EXPECT_TRUE(Retained);
 }
 
+TEST(IntrusiveRefCntPtr, ConstructorSFINAE) {
+  struct X {};
+  struct Y : X {};
+  struct Z {};
+  static_assert(std::is_convertible<IntrusiveRefCntPtr<X> &&,
+                                    IntrusiveRefCntPtr<X>>::value,
+                "X -> X is okay");
+  static_assert(std::is_convertible<const IntrusiveRefCntPtr<X> &,
+                                    IntrusiveRefCntPtr<X>>::value,
+                "X -> X is okay");
+  static_assert(
+      std::is_convertible<std::unique_ptr<X>, IntrusiveRefCntPtr<X>>::value,
+      "X -> X is okay");
+  static_assert(std::is_convertible<IntrusiveRefCntPtr<Y> &&,
+                                    IntrusiveRefCntPtr<X>>::value,
+                "Y -> X is okay");
+  static_assert(std::is_convertible<const IntrusiveRefCntPtr<Y> &,
+                                    IntrusiveRefCntPtr<X>>::value,
+                "Y -> X is okay");
+  static_assert(
+      std::is_convertible<std::unique_ptr<Y>, IntrusiveRefCntPtr<X>>::value,
+      "Y -> X is okay");
+  static_assert(!std::is_convertible<IntrusiveRefCntPtr<X> &&,
+                                     IntrusiveRefCntPtr<Y>>::value,
+                "X -> Y should be rejected with SFINAE");
+  static_assert(!std::is_convertible<const IntrusiveRefCntPtr<X> &,
+                                     IntrusiveRefCntPtr<Y>>::value,
+                "X -> Y should be rejected with SFINAE");
+  static_assert(
+      !std::is_convertible<std::unique_ptr<X>, IntrusiveRefCntPtr<Y>>::value,
+      "X -> Y should be rejected with SFINAE");
+  static_assert(!std::is_convertible<IntrusiveRefCntPtr<X> &&,
+                                     IntrusiveRefCntPtr<Z>>::value,
+                "X -> Z should be rejected with SFINAE");
+  static_assert(!std::is_convertible<const IntrusiveRefCntPtr<X> &,
+                                     IntrusiveRefCntPtr<Z>>::value,
+                "X -> Z should be rejected with SFINAE");
+  static_assert(
+      !std::is_convertible<std::unique_ptr<X>, IntrusiveRefCntPtr<Z>>::value,
+      "X -> Z should be rejected with SFINAE");
+}
+
 } // end namespace llvm
