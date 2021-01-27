@@ -935,6 +935,16 @@ size_t mapped_file_region::size() const {
   return Size;
 }
 
+std::error_code mapped_file_region::sync() const {
+  assert(Mapping && "Mapping failed but used anyway!");
+  assert(Mode == readwrite && "sync only valid for readwrite regions!");
+  if (!::FlushViewOfFile(Mapping, Size))
+    return mapWindowsError(GetLastError());
+  if (!::FlushFileBuffers(FileHandle))
+    return mapWindowsError(GetLastError());
+  return std::error_code();
+}
+
 char *mapped_file_region::data() const {
   assert(Mapping && "Mapping failed but used anyway!");
   return reinterpret_cast<char*>(Mapping);
