@@ -14,6 +14,7 @@ using namespace dependencies;
 
 DependencyScanningService::DependencyScanningService(
     ScanningMode Mode, ScanningOutputFormat Format, bool ReuseFileManager,
-    bool SkipExcludedPPRanges)
+    bool SkipExcludedPPRanges, bool InterceptModuleOutputs)
     : Mode(Mode), Format(Format), ReuseFileManager(ReuseFileManager),
-      SkipExcludedPPRanges(SkipExcludedPPRanges) {}
+      SkipExcludedPPRanges(SkipExcludedPPRanges),
+      InterceptModuleOutputs(InterceptModuleOutputs) {}

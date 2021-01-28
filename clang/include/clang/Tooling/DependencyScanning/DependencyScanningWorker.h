@@ -19,6 +19,7 @@
 #include "clang/Tooling/DependencyScanning/ModuleDepCollector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/OutputManager.h"
 #include <string>
 
 namespace clang {
@@ -67,6 +68,9 @@ private:
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts;
   std::shared_ptr<PCHContainerOperations> PCHContainerOps;
   std::unique_ptr<ExcludedPreprocessorDirectiveSkipMapping> PPSkipMappings;
+
+  /// Output manager to use.
+  std::shared_ptr<llvm::vfs::OutputManager> Outputs;
 
   llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> RealFS;
   /// The file system that is used by each worker when scanning for

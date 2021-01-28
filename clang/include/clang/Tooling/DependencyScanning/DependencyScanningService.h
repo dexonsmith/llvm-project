@@ -48,13 +48,16 @@ class DependencyScanningService {
 public:
   DependencyScanningService(ScanningMode Mode, ScanningOutputFormat Format,
                             bool ReuseFileManager = true,
-                            bool SkipExcludedPPRanges = true);
+                            bool SkipExcludedPPRanges = true,
+                            bool InterceptModuleOutputs = true);
 
   ScanningMode getMode() const { return Mode; }
 
   ScanningOutputFormat getFormat() const { return Format; }
 
   bool canReuseFileManager() const { return ReuseFileManager; }
+
+  bool interceptModuleOutputs() const { return InterceptModuleOutputs; }
 
   bool canSkipExcludedPPRanges() const { return SkipExcludedPPRanges; }
 
@@ -70,6 +73,8 @@ private:
   /// ranges by bumping the buffer pointer in the lexer instead of lexing the
   /// tokens in the range until reaching the corresponding directive.
   const bool SkipExcludedPPRanges;
+  /// Whether to intercept modules in-memory to avoid disk traffic.
+  const bool InterceptModuleOutputs;
   /// The global file system cache.
   DependencyScanningFilesystemSharedCache SharedCache;
 };

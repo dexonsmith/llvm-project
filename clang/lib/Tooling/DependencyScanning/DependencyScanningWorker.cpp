@@ -50,12 +50,13 @@ class DependencyScanningAction : public tooling::ToolAction {
 public:
   DependencyScanningAction(
       StringRef WorkingDirectory, DependencyConsumer &Consumer,
+      std::shared_ptr<llvm::vfs::OutputManager> Outputs,
       llvm::IntrusiveRefCntPtr<DependencyScanningWorkerFilesystem> DepFS,
       ExcludedPreprocessorDirectiveSkipMapping *PPSkipMappings,
       ScanningOutputFormat Format)
       : WorkingDirectory(WorkingDirectory), Consumer(Consumer),
-        DepFS(std::move(DepFS)), PPSkipMappings(PPSkipMappings),
-        Format(Format) {}
+        Outputs(std::move(Outputs)), DepFS(std::move(DepFS)),
+        PPSkipMappings(PPSkipMappings), Format(Format) {}
 
   bool runInvocation(std::shared_ptr<CompilerInvocation> Invocation,
                      FileManager *FileMgr,
@@ -64,6 +65,14 @@ public:
     // Create a compiler instance to handle the actual work.
     CompilerInstance Compiler(std::move(PCHContainerOps));
     Compiler.setInvocation(std::move(Invocation));
+
+    // Configure the output manager.
+    if (Outputs) {
+      Compiler.setOutputManager(std::move(Outputs));
+
+      // FIXME: Is this the best way to set the flag?
+      Compiler.getFrontendOpts().BuildingImplicitModuleUsesLock = false;
+    }
 
     // Don't print 'X warnings and Y errors generated'.
     Compiler.getDiagnosticOpts().ShowCarets = false;
@@ -142,6 +151,7 @@ public:
 private:
   StringRef WorkingDirectory;
   DependencyConsumer &Consumer;
+  std::shared_ptr<llvm::vfs::OutputManager> Outputs;
   llvm::IntrusiveRefCntPtr<DependencyScanningWorkerFilesystem> DepFS;
   ExcludedPreprocessorDirectiveSkipMapping *PPSkipMappings;
   ScanningOutputFormat Format;
@@ -155,6 +165,35 @@ DependencyScanningWorker::DependencyScanningWorker(
   DiagOpts = new DiagnosticOptions();
   PCHContainerOps = std::make_shared<PCHContainerOperations>();
   RealFS = llvm::vfs::createPhysicalFileSystem();
+
+  if (Service.interceptModuleOutputs()) {
+    using namespace llvm;
+    using namespace llvm::vfs;
+
+    // Create an in-memory filesystem for storing modules and overlay it on top
+    // of RealFS.
+    auto InMemoryFS = makeIntrusiveRefCnt<InMemoryFileSystem>();
+    {
+      auto OverlayFS =
+        makeIntrusiveRefCnt<OverlayFileSystem>(createPhysicalFileSystem());
+      OverlayFS->pushOverlay(InMemoryFS);
+      RealFS = std::move(OverlayFS);
+    }
+
+    // Capture outputs with a ".pcm" extension and save them in ModulesCache.
+    // Don't reject attempts to overwrite (it'll still reject if the content
+    // doesn't match).
+    //
+    // FIXME: The workers could share a single cache using an in-memory CAS.
+    auto InMemoryOutputs =
+        makeIntrusiveRefCnt<InMemoryOutputBackend>(std::move(InMemoryFS));
+    InMemoryOutputs->setShouldRejectExistingFiles(false);
+    Outputs = std::make_shared<OutputManager>(makeFilteringOutputBackend(
+        std::move(InMemoryOutputs), [](StringRef OutputPath, OutputConfig) {
+          return llvm::sys::path::extension(OutputPath) == ".pcm";
+        }));
+  }
+
   if (Service.canSkipExcludedPPRanges())
     PPSkipMappings =
         std::make_unique<ExcludedPreprocessorDirectiveSkipMapping>();
@@ -193,7 +232,7 @@ llvm::Error DependencyScanningWorker::computeDependencies(
     Tool.setRestoreWorkingDir(false);
     Tool.setPrintErrorMessage(false);
     Tool.setDiagnosticConsumer(&DC);
-    DependencyScanningAction Action(WorkingDirectory, Consumer, DepFS,
+    DependencyScanningAction Action(WorkingDirectory, Consumer, Outputs, DepFS,
                                     PPSkipMappings.get(), Format);
     return !Tool.run(&Action);
   });
