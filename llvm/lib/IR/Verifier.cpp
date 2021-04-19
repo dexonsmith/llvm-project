@@ -330,6 +330,7 @@ class Verifier : public InstVisitor<Verifier>, VerifierSupport {
 
   /// Cache of attribute lists verified.
   SmallPtrSet<const void *, 32> AttributeListsVisited;
+  SmallPtrSet<const void *, 32> AttributesVisited;
 
   // Verify that this GlobalValue is only used in this module.
   // This map is used to avoid visiting uses twice. We can arrive at a user
@@ -1900,6 +1901,8 @@ void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeList Attrs,
       Assert(!AttrSet.hasAttributes() || AttrSet.hasParentContext(Context),
              "Attribute set does not match Module context!", &AttrSet);
       for (const auto &A : AttrSet) {
+        if (!AttributesVisited.insert(A.getRawPointer()).second)
+          continue;
         Assert(A.hasParentContext(Context),
                "Attribute does not match Module context!", &A);
       }
