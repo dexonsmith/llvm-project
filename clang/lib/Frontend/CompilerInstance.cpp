@@ -813,10 +813,10 @@ CompilerInstance::createOutputFileImpl(StringRef OutputPath, bool Binary,
       OutputPath,
       OutputConfig()
           .set(OutputConfigFlag::TextWithCRLF, !Binary)
-          .set(OutputConfigFlag::NoCrashCleanup, !RemoveFileOnSignal)
-          .set(OutputConfigFlag::NoAtomicWrite, !UseTemporary)
-          .set(OutputConfigFlag::NoImplyCreateDirectories,
-               !UseTemporary || !CreateMissingDirectories));
+          .set(OutputConfigFlag::CrashCleanup, RemoveFileOnSignal)
+          .set(OutputConfigFlag::AtomicWrite, UseTemporary)
+          .set(OutputConfigFlag::ImplyCreateDirectories,
+               UseTemporary && CreateMissingDirectories));
   if (!O)
     return O.takeError();
 
