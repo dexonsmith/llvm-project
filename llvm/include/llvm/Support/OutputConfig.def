@@ -6,16 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef HANDLE_OUTPUT_CONFIG
-#error "Missing macro definition of HANDLE_OUTPUT_CONFIG"
+#ifndef HANDLE_OUTPUT_CONFIG_FLAG
+#error "Missing macro definition of HANDLE_OUTPUT_CONFIG_FLAG"
 #endif
 
-// #define HANDLE_OUTPUT_CONFIG(NAME, DEFAULT)
+// #define HANDLE_OUTPUT_CONFIG_FLAG(NAME, DEFAULT)
 
-HANDLE_OUTPUT_CONFIG(Text)
-HANDLE_OUTPUT_CONFIG(TextWithCRLF)
-HANDLE_OUTPUT_CONFIG(Volatile)
-HANDLE_OUTPUT_CONFIG(CrashCleanup)
-HANDLE_OUTPUT_CONFIG(AtomicWrite)
-HANDLE_OUTPUT_CONFIG(ImplyCreateDirectories)
-HANDLE_OUTPUT_CONFIG(Overwrite)
+HANDLE_OUTPUT_CONFIG_FLAG(Text, false)
+HANDLE_OUTPUT_CONFIG_FLAG(TextWithCRLF, false)
+HANDLE_OUTPUT_CONFIG_FLAG(Volatile, false)
+HANDLE_OUTPUT_CONFIG_FLAG(CrashCleanup, true)
+HANDLE_OUTPUT_CONFIG_FLAG(AtomicWrite, true)
+HANDLE_OUTPUT_CONFIG_FLAG(ImplyCreateDirectories, true)
+HANDLE_OUTPUT_CONFIG_FLAG(Overwrite, true)
+
+#undef HANDLE_OUTPUT_CONFIG_FLAG

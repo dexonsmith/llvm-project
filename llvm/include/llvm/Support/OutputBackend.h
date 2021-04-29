@@ -15,120 +15,12 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/simple_ilist.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/OutputConfig.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
 namespace vfs {
-
-/// Set of advisory flags for backends. By default, all flags are off.
-enum class OutputConfigFlag {
-  /// Files should be opened in text mode.
-  Text,
-
-  /// Files should be opened in text mode. Backends modelling a Windows
-  /// filesystem should translate newlines to carriage returns and line feeds.
-  ///
-  /// Seeking is not supported.
-  TextWithCRLF,
-
-  /// Advise that other processes are likely to *modify* this output after it
-  /// has been written (as opposed to replacing it atomically); for example, if
-  /// the output is a source file on-disk, an editor may modify it in place.
-  /// \a OnDiskOutputBackend will disable forwarding write-through buffers in
-  /// this case.
-  Volatile,
-
-  /// No need to clean this up if there's a crash. If set, backends will not
-  /// install \a llvm::RemoveOnSignal or similar, even if configured to do so
-  /// by default.
-  NoCrashCleanup,
-
-  /// This file does not need to be atomically moved into its final path. If
-  /// set, \a OnDiskOutputBackend will not use temporary files, even if it's
-  /// configured to do so by default.
-  NoAtomicWrite,
-
-  /// Do not imply creation of missing directories. Backends that don't have
-  /// directories as a first-class concept are free to ignore this.
-  NoImplyCreateDirectories,
-
-  /// Error if an output already exists and/or would be clobbered. Note: some
-  /// backends only know about files and directories they've created
-  /// themselves.
-  NoOverwrite,
-
-  // Keep this last.
-  NumFlags,
-};
-
-/// Full configuration for an output for use by the \a OutputBackend. Each
-/// configuration flag is either \c true or \c false.
-class OutputConfig {
-  /// Don't use std::bitset since it's mostly not constexpr. If primitive types
-  /// don't have enough bits, this can use a simple constexpr-friendly bitset.
-  using BitsetType = unsigned char;
-
-  /// Construct the combined enumeration from any individual enum.
-  constexpr static BitsetType getBitset(OutputConfigFlag Flag) {
-    static_assert(sizeof(BitsetType) <= sizeof(int),
-                  "Returned literal will overflow");
-    return 1u << static_cast<int>(Flag);
-  }
-
-  /// Check that the flags fit in the bitset.
-  static_assert(static_cast<int>(OutputConfigFlag::NumFlags) <=
-                    sizeof(BitsetType) * 8,
-                "BitsetType ran out of bits");
-
-public:
-  /// Test whether there are no flags turned on.
-  constexpr bool none() const { return !Bits; }
-
-  /// Check the value for \c Flag.
-  constexpr bool test(OutputConfigFlag Flag) const {
-    return Bits & getBitset(Flag);
-  }
-
-  /// Set \c Flag to \c Value.
-  constexpr OutputConfig &set(OutputConfigFlag Flag, bool Value = true) {
-    if (Value)
-      Bits |= getBitset(Flag);
-    else
-      Bits &= ~getBitset(Flag);
-    return *this;
-  }
-
-  /// Set \c Flags to \c Value.
-  constexpr OutputConfig &set(std::initializer_list<OutputConfigFlag> Flags,
-                              bool Value = true) {
-    for (auto Flag : Flags)
-      set(Flag, Value);
-    return *this;
-  }
-
-  /// Set \c Flag to \c false.
-  constexpr OutputConfig &reset(OutputConfigFlag Flag) {
-    return set(Flag, false);
-  }
-
-  /// Set \c Flags to \c false.
-  constexpr OutputConfig &reset(std::initializer_list<OutputConfigFlag> Flags) {
-    return set(Flags, false);
-  }
-
-  /// Nothing is set.
-  constexpr OutputConfig() = default;
-  constexpr OutputConfig(NoneType) {}
-
-  /// Set exactly the flags listed, leaving others turned off.
-  constexpr OutputConfig(std::initializer_list<OutputConfigFlag> OnFlags) {
-    set(OnFlags);
-  }
-
-private:
-  BitsetType Bits = 0;
-};
 
 class OutputBackend;
 
@@ -421,7 +313,7 @@ public:
 
 /// An output backend proxy with a fixed workign directory.
 class OutputDirectory : public OutputDirectoryAdaptor<ProxyOutputBackend> {
-  virtual void anchor();
+  virtual void anchor() override;
 
 public:
   /// Construct an output directory for a given backend. Does not check or
