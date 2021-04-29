@@ -1,4 +1,4 @@
-//===- OutputBackend.cpp - Manage compiler outputs ------------------------===//
+//===- OutputBackend.cpp - Virtualize compiler outputs --------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -458,7 +458,7 @@ std::error_code OnDiskOutputFile::tryToCreateTemporary() {
     if (std::error_code EC =
             sys::fs::createUniqueFile(TempPath, NewFD, TempPath))
       return EC;
-    if (!Config.test(OutputConfigFlag::NoCrashCleanup))
+    if (Config.get(OutputConfigFlag::CrashCleanup))
       sys::RemoveFileOnSignal(TempPath);
     this->TempPath = TempPath.str().str();
     FD = NewFD;
@@ -471,7 +471,7 @@ std::error_code OnDiskOutputFile::tryToCreateTemporary() {
     return std::error_code();
 
   if (EC != std::errc::no_such_file_or_directory ||
-      Config.test(OutputConfigFlag::NoImplyCreateDirectories))
+      Config.get(OutputConfigFlag::NoImplyCreateDirectories))
     return EC;
 
   // Create parent directories and try again.
@@ -504,7 +504,7 @@ Error OnDiskOutputFile::initializeFD() {
   // Disable temporary file for other non-regular files, and if we get a status
   // object, also check if we can write and disable write-through buffers if
   // appropriate.
-  if (!Config.test(OutputConfigFlag::NoAtomicWrite)) {
+  if (Config.get(OutputConfigFlag::AtomicWrite)) {
     sys::fs::file_status Status;
     sys::fs::status(getPath(), Status);
     if (sys::fs::exists(Status)) {
@@ -522,7 +522,7 @@ Error OnDiskOutputFile::initializeFD() {
 
   // If (still) using a temporary file, try to create it (and return success if
   // that works).
-  if (!Config.test(OutputConfigFlag::NoAtomicWrite))
+  if (Config.get(OutputConfigFlag::AtomicWrite))
     if (!tryToCreateTemporary())
       return Error::success();
 
@@ -530,7 +530,7 @@ Error OnDiskOutputFile::initializeFD() {
   int NewFD;
   if (auto EC = sys::fs::openFileForWrite(
           getPath(), NewFD, sys::fs::CD_CreateAlways,
-          Config.test(OutputConfigFlag::Text) ? sys::fs::OF_Text
+          Config.get(OutputConfigFlag::Text) ? sys::fs::OF_Text
                                               : sys::fs::OF_None))
     return errorCodeToError(EC);
   FD = NewFD;
@@ -543,14 +543,14 @@ Error OnDiskOutputFile::initializeFD() {
     checkStatusForWriteThrough(Status);
   }
 
-  if (!Config.test(OutputConfigFlag::NoCrashCleanup))
+  if (Config.get(OutputConfigFlag::CrashCleanup))
     sys::RemoveFileOnSignal(getPath());
   return Error::success();
 }
 
 void OnDiskOutputFile::initializeExistingFD() {
   this->Config.set(OutputConfigFlag::NoAtomicWrite);
-  if (!Config.test(OutputConfigFlag::NoCrashCleanup))
+  if (Config.get(OutputConfigFlag::CrashCleanup))
     sys::RemoveFileOnSignal(getPath());
 }
 
@@ -581,7 +581,7 @@ std::unique_ptr<raw_pwrite_stream> OnDiskOutputFile::takeOSImpl() {
 
   // Check whether we can get away with returning the stream directly. Note
   // that we don't need seeking for Text files.
-  if (OS->supportsSeeking() || Config.test(OutputConfigFlag::Text))
+  if (OS->supportsSeeking() || Config.get(OutputConfigFlag::Text))
     return std::move(OS);
 
   // Fall back on the content buffer.
@@ -710,9 +710,9 @@ OnDiskOutputBackend::createFileImpl(StringRef ResolvedPath,
 Expected<IntrusiveRefCntPtr<OutputDirectory>>
 OnDiskOutputBackend::createDirectoryImpl(StringRef ResolvedPath,
                                          OutputConfig Config) {
-  bool IgnoreExisting = !Config.test(OutputConfigFlag::NoOverwrite);
+  bool IgnoreExisting = Config.get(OutputConfigFlag::Overwrite);
   if (std::error_code EC =
-          Config.test(OutputConfigFlag::NoImplyCreateDirectories)
+          Config.get(OutputConfigFlag::NoImplyCreateDirectories)
               ? sys::fs::create_directory(ResolvedPath, IgnoreExisting)
               : sys::fs::create_directories(ResolvedPath, IgnoreExisting))
     return errorCodeToError(EC);
@@ -730,7 +730,7 @@ OnDiskOutputBackend::createUniqueFileImpl(StringRef ResolvedModel,
       return std::make_unique<OnDiskOutputFile>(FD, Path, Config, Settings);
 
     if (EC != std::errc::no_such_file_or_directory ||
-        Config.test(OutputConfigFlag::NoImplyCreateDirectories))
+        Config.get(OutputConfigFlag::NoImplyCreateDirectories))
       return errorCodeToError(EC);
   }
 
@@ -753,7 +753,7 @@ OnDiskOutputBackend::createUniqueDirectoryImpl(StringRef ResolvedPrefix,
       return getDirectoryImpl(Path);
 
     if (EC != std::errc::no_such_file_or_directory ||
-        Config.test(OutputConfigFlag::NoImplyCreateDirectories))
+        Config.get(OutputConfigFlag::NoImplyCreateDirectories))
       return errorCodeToError(EC);
   }
 
@@ -809,7 +809,7 @@ Error InMemoryOutputDestination::storeContentBuffer(ContentBuffer &Content) {
 Expected<std::unique_ptr<OutputFile>>
 InMemoryOutputBackend::createFileImpl(StringRef ResolvedPath,
                                       OutputConfig Config) {
-  if ((Settings.FailIfExists || Config.test(OutputConfigFlag::NoOverwrite)) &&
+  if ((Settings.FailIfExists || Config.get(OutputConfigFlag::NoOverwrite)) &&
       FS->exists(ResolvedPath))
     return createCannotOverwriteExistingOutputError(ResolvedPath);
 
