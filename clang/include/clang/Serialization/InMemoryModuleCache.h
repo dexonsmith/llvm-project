@@ -17,93 +17,69 @@
 
 namespace clang {
 
-class ProvidedModule {
-public:
-  /// True unless this module needs to be "checked" for compatability /
-  /// configuration; if it's not compatible, should move on to another
-  /// provider.
-  ///
-  /// FIXME: Or, should the provider only return if it's valid? How does this
-  /// interact with the ASTReader?
-  bool isPrecise() const;
-
-  StringRef getName() const; // module name.
-  StringRef getPCM() const; // memory buffer data.
-};
-
 class ModuleCache;
 
-class ModuleProvider {
+class PCMProvider {
 public:
-  virtual ~ModuleProvider() = default;
+  virtual ~PCMProvider() = default;
 
-  // 
-  virtual Optional<ProvidedModule> getByName(StringRef Name) = 0;
-};
-
-/// If the module is already in the ModuleManager, need to use that one...
-///
-/// FIXME: does this make sense? Or is this the wrong layering?
-class ModuleManagerProvider : public ModuleProvider {
-public:
+  virtual std::unique_ptr<MemoryBuffer> getPCM(StringRef ModuleName) = 0;
 };
 
 /// -fmodule-file=<pcm>
 ///
 /// Note: these need to be loaded into the module manager to determine what
 /// modules they hold.
-class ModuleFileProvider : public ModuleProvider {
+class ModuleFilePCMProvider : public PCMProvider {
 public:
   llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS;
-  SmallVector<std::string> PCMs;
+  SmallVector<std::string> ModuleFiles;
 
   // FIXME: Is this necessary at all? Or does command-line processing fill this in?
+  std::unique_ptr<MemoryBuffer> getPCM(StringRef ModuleName) override;
 };
 
-/// -fprebuild-module-path
-class PrebuiltModuleProvider : public ModuleProvider {
+/// -fprebuilt-module-path and -fmodule-file=<name>=<pcm>
+class PrebuiltModulePCMProvider : public PCMProvider {
 public:
   llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS;
-  SmallVector<std::string> PCMs;
 
-  // FIXME: Is this necessary at all? Or does command-line processing fill this in?
+  SmallVector<std::string> PrebuiltModulePaths;
+  StringMap<std::string> PrebuiltModuleFiles;
+
+  std::unique_ptr<MemoryBuffer> getPCM(StringRef ModuleName) override;
 };
 
-/// -fmodule-file=<name>=<pcm>
-///
-/// Note: these are loaded on-demand. They override modules referenced by other
-/// PCM files.
-class NamedModuleFileProvider : public ModuleProvider {
+class PCMBuilder {
 public:
-
-  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS;
-  StringMap<std::string> PCMPathsByModuleName;
-};
-
-class ModuleBuilder {
-public:
+  /// Build the PCM corresponding to \p Invocation and return a buffer
+  /// containing it. Optionally, write it to disk at \p Output.
   virtual Expected<std::unique_ptr<MemoryBuffer>>
-  buildModule(std::shared_ptr<CompilerInvocation> Invocation) = 0;
-
-  /// Optionally, write modules out to disk.
-  ///
-  /// FIXME: Should this be in a subclass? Should this be an OutputBackend?
-  Optional<std::string> ModulesCachePath;
+  buildModule(std::shared_ptr<CompilerInvocation> Invocation,
+              std::unique_ptr<OutputFile> Output = nullptr) = 0;
 };
+
+class OnDemandPCM
 
 /// Build modules on-demand.
-class BuildModuleOnDemandProvider : public ModuleProvider {
+class OnDemandPCMProvider : public PCMProvider {
 public:
+  std::unique_ptr<MemoryBuffer> getPCM(StringRef ModuleName) final;
+
+  virtual std::shared_ptr<CompilerInvocation>  getPCM(StringRef ModuleName) final;
+
   /// Base compiler invocation, to be augmented.
   CompilerInvocation BaseInvocation;
 
   /// Virtualized builder.
-  std::unique_ptr<ModuleBuilder> Builder;
+  std::unique_ptr<PCMBuilder> Builder;
 };
 
 /// Build modules on-demand and store them on-disk.
-class OnDiskCacheModuleProvider : public BuildModuleOnDemandProvider {
+class OnDiskCachePCMProvider : public OnDemandPCMProvider {
 public:
+  std::unique_ptr<MemoryBuffer> getPCM(StringRef ModuleName) override;
+
   /// FIXME: Should this really use the VFS? For the implicit modules cache, it
   /// might make more sense to access the disk directly... it's already
   /// bypassing stat-caching and using a lock manager...
@@ -118,7 +94,7 @@ public:
 };
 
 /// Build modules in a shared context.
-class SharedContextModuleBuilder : public ModuleBuilder {
+class SharedContextModuleBuilder : public PCMBuilder {
 public:
   // Reused across each CompilerInstance.
   IntrusiveRefCntPtr<FileManager> FM;
@@ -129,18 +105,35 @@ public:
 };
 
 /// Build modules in an isolated context.
-class IsolatedContextModuleBuilder : public ModuleBuilder {
+class IsolatedContextModuleBuilder : public PCMBuilder {
 public:
 };
 
-
-class ModuleCache {
+/// PCMCache is virtualized through a number of mechanisms.
+///
+/// PCMCache directly uses a sequence (stack or queue?) of PCMProviders, which
+/// given a module name can/will find a PCM to deserialize.
+///
+/// OnDemandPCMProvider, if used, has options to configure how to build
+/// modules:
+/// - Shared vs. isolated context
+/// - Fuzzy vs. exact
+///
+/// 1. Providing PCMs, which may be:
+///   - Already built in a file / path.
+///   - Buildable.
+/// 2. Building PCMs, potentially using a shared context, or otherwise.
+/// 3. 
+class PCMCache {
 public:
 
 private:
-  struct StoredModule {
-  };
-  StringMap<StringRef, std::unique_ptr<llvm::MemoryBuffer>> ModulesByName;
+  /// PCMs that have been loaded, by module name.
+  StringMap<std::unique_ptr<llvm::MemoryBuffer>> LoadedPCMs;
+
+  /// PCMs that have not (yet) been loaded, by module name. These could be
+  /// rejected by the compiler.
+  StringMap<std::unique_ptr<llvm::MemoryBuffer>> UnloadedPCMs;
 };
 
 /// In-memory cache for modules.
