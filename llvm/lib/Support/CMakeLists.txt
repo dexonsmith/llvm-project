@@ -217,6 +217,10 @@ add_llvm_component_library(LLVMSupport
   UnicodeCaseFold.cpp
   VersionTuple.cpp
   VirtualFileSystem.cpp
+  VirtualOutputBackend.cpp
+  VirtualOutputConfig.cpp
+  VirtualOutputError.cpp
+  VirtualOutputFile.cpp
   WithColor.cpp
   X86TargetParser.cpp
   YAMLParser.cpp
