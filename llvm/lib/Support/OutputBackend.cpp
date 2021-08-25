@@ -21,6 +21,8 @@ using namespace llvm;
 using namespace llvm::vfs;
 
 void OutputFile::anchor() {}
+void BufferedOutputFile::anchor() {}
+
 void OutputBackend::anchor() {}
 void OutputDirectory::anchor() {}
 void OnDiskOutputBackend::anchor() {}
@@ -37,11 +39,6 @@ char OnDiskOutputRenameTempError::ID = 0;
 
 OutputFile::~OutputFile() = default;
 
-std::unique_ptr<raw_pwrite_stream> OutputFile::createStreamForContentBuffer() {
-  Bytes = std::make_unique<SmallVector<char, 0>>();
-  return std::make_unique<raw_svector_ostream>(*Bytes);
-}
-
 Error OutputFile::close() {
   assert(isOpen() && "Output already closed");
 
@@ -49,16 +46,18 @@ Error OutputFile::close() {
   OS = nullptr;
   IsOpen = false;
 
-  // If there's no content buffer this is using a stream.
-  if (!Bytes)
-    return storeStreamedContent();
-
-  // If there's a content buffer, send it along.
-  OutputFile::ContentBuffer Buffer(std::move(*Bytes));
-  return storeContentBuffer(Buffer);
+  return store();
 }
 
-void OutputFile::ContentBuffer::finishConstructingFromVector() {
+Optional<BufferedOutputFile::ContentBuffer> BufferedOutputFile::takeBuffer() {
+  if (!Bytes)
+    return None;
+  ContentBuffer Buffer(std::move(*Bytes));
+  Bytes = nullptr;
+  return Buffer;
+}
+
+void BufferedOutputFile::ContentBuffer::finishConstructingFromVector() {
   // If Vector is empty, we can't guarantee SmallVectorMemoryBuffer will keep
   // pointer identity. But since there's no content, it's all moot; just
   // construct a reference.
@@ -98,7 +97,7 @@ private:
 } // namespace
 
 std::unique_ptr<MemoryBuffer>
-OutputFile::ContentBuffer::takeOwnedBufferOrNull(StringRef Identifier) {
+BufferedOutputFile::ContentBuffer::takeOwnedBufferOrNull(StringRef Identifier) {
   if (OwnedBuffer) {
     // Ensure the identifier is correct.
     if (OwnedBuffer->getBufferIdentifier() == Identifier)
@@ -121,28 +120,25 @@ OutputFile::ContentBuffer::takeOwnedBufferOrNull(StringRef Identifier) {
 }
 
 std::unique_ptr<MemoryBuffer>
-OutputFile::ContentBuffer::takeBuffer(StringRef Identifier) {
+BufferedOutputFile::ContentBuffer::takeBuffer(StringRef Identifier) {
   if (std::unique_ptr<MemoryBuffer> B = takeOwnedBufferOrNull(Identifier))
     return B;
   return MemoryBuffer::getMemBuffer(Bytes, Identifier);
 }
 
 std::unique_ptr<MemoryBuffer>
-OutputFile::ContentBuffer::takeOwnedBufferOrCopy(StringRef Identifier) {
+BufferedOutputFile::ContentBuffer::takeOwnedBufferOrCopy(StringRef Identifier) {
   if (std::unique_ptr<MemoryBuffer> B = takeOwnedBufferOrNull(Identifier))
     return B;
   return MemoryBuffer::getMemBufferCopy(Bytes, Identifier);
 }
 
 static std::unique_ptr<OutputFile> makeNullOutput(StringRef Path) {
-  class NullOutput : public OutputFile {
+  class NullOutput final : public OutputFile {
     std::unique_ptr<raw_pwrite_stream> takeOSImpl() override {
       return std::make_unique<raw_null_ostream>();
     }
-    Error storeStreamedContent() override { return Error::success(); }
-    Error storeContentBuffer(ContentBuffer &) override {
-      return Error::success();
-    }
+    Error store() override { return Error::success(); }
     bool isNull() const override { return true; }
 
   public:
@@ -328,7 +324,7 @@ llvm::vfs::makeNullOutputBackend(sys::path::Style PathStyle) {
 }
 
 namespace {
-class OnDiskOutputFile : public OutputFile {
+class OnDiskOutputFile final : public BufferedOutputFile {
 public:
   /// Open a file on-disk for writing to \a OutputPath.
   ///
@@ -345,11 +341,7 @@ public:
   /// Take an open output stream.
   std::unique_ptr<raw_pwrite_stream> takeOSImpl() override;
 
-  Error storeStreamedContent() override { return closeFile(nullptr); }
-
-  Error storeContentBuffer(ContentBuffer &Content) override {
-    return closeFile(&Content);
-  }
+  Error store() override { return closeFile(takeBuffer()); }
 
 private:
   using CheckingContentConsumerType =
@@ -375,7 +367,7 @@ private:
   /// Returns a file-backed MemoryBuffer when the file was written using a
   /// write-through memory buffer, unless it won't be null-terminated or it's
   /// too small. Otherwise, when there's no error, returns \c nullptr.
-  Error closeFile(ContentBuffer *MaybeContent);
+  Error closeFile(Optional<ContentBuffer> MaybeContent);
 
   Expected<std::unique_ptr<sys::fs::mapped_file_region>>
   openMappedFile(size_t Size);
@@ -574,7 +566,7 @@ Error OnDiskOutputFile::initializeFile() {
 
 std::unique_ptr<raw_pwrite_stream> OnDiskOutputFile::takeOSImpl() {
   if (Settings.WriteThrough.Use)
-    return createStreamForContentBuffer();
+    return BufferedOutputFile::takeOSImpl();
 
   assert(OS && "Expected file to be initialized");
 
@@ -584,7 +576,7 @@ std::unique_ptr<raw_pwrite_stream> OnDiskOutputFile::takeOSImpl() {
     return std::move(OS);
 
   // Fall back on the content buffer.
-  return createStreamForContentBuffer();
+  return BufferedOutputFile::takeOSImpl();
 }
 
 std::unique_ptr<llvm::MemoryBuffer> OnDiskOutputFile::convertMappedFileToBuffer(
@@ -625,7 +617,7 @@ OnDiskOutputFile::openMappedFile(size_t Size) {
   return Mapping;
 }
 
-Error OnDiskOutputFile::closeFile(ContentBuffer *MaybeContent) {
+Error OnDiskOutputFile::closeFile(Optional<ContentBuffer> MaybeContent) {
   Optional<StringRef> BufferedContent;
   if (MaybeContent)
     BufferedContent = MaybeContent->getBytes();

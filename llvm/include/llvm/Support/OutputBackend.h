@@ -29,9 +29,6 @@ class OutputFile {
   virtual void anchor();
 
 public:
-  /// Internal utility for holding completed content for an output.
-  class ContentBuffer;
-
   /// Close an output, finalizing its content and sending it to the configured
   /// \a OutputBackend.
   ///
@@ -67,30 +64,13 @@ public:
   StringRef getPath() const { return Path; }
 
 protected:
-  /// Return a content buffer stream and ask \a close() to call \a
-  /// storeContentBuffer().
-  std::unique_ptr<raw_pwrite_stream> createStreamForContentBuffer();
-
   /// Override to return a custom stream object and have \a close() call \a
   /// storeStreamedContent(). The default implementation calls \a
   /// initializeForContentBuffer() and forwards to \a
   /// createStreamForContentBuffer().
-  virtual std::unique_ptr<raw_pwrite_stream> takeOSImpl() {
-    return createStreamForContentBuffer();
-  }
+  virtual std::unique_ptr<raw_pwrite_stream> takeOSImpl() = 0;
 
-  virtual Error storeStreamedContent() {
-    llvm_unreachable("override this if initializeForStreamedContent() returns "
-                     "a stream without calling createStreamForContentBuffer()");
-  }
-
-  virtual Error storeContentBuffer(ContentBuffer &Content) = 0;
-
-  /// Allow subclasses to call \a OutputFile::storeContentBuffer() on other
-  /// files.
-  static Error storeContentBufferIn(ContentBuffer &Content, OutputFile &File) {
-    return File.storeContentBuffer(Content);
-  }
+  virtual Error store() = 0;
 
   /// Check if this is /dev/null.
   virtual bool isNull() const { return false; }
@@ -131,12 +111,31 @@ private:
   /// Track whether this has been initialized.
   bool IsStreamInitialized = false;
 
-  /// Content buffer if the output destination requests one. Behind a pointer
-  /// in case the output is moved, since the vector needs a stable address.
-  std::unique_ptr<SmallVector<char, 0>> Bytes;
-
   // Destroyed ContentBuffer since it can reference it.
   std::unique_ptr<raw_pwrite_stream> OS;
+};
+
+class BufferedOutputFile : public OutputFile {
+  virtual void anchor();
+
+public:
+  class ContentBuffer;
+
+protected:
+  /// Return the stream for OutputFile to manage.
+  virtual std::unique_ptr<raw_pwrite_stream> takeOSImpl() {
+    Bytes = std::make_unique<SmallVector<char, 0>>();
+    return std::make_unique<raw_svector_ostream>(*Bytes);
+  }
+
+  Optional<ContentBuffer> takeBuffer();
+
+  explicit BufferedOutputFile(StringRef Path) : OutputFile(Path) {}
+
+private:
+  /// Behind a pointer in case the output is moved so that the vector has a
+  /// stable address.
+  std::unique_ptr<SmallVector<char, 0>> Bytes;
 };
 
 class OutputDirectory;
@@ -393,7 +392,7 @@ public:
 /// passing content between them. \a ContentBuffer helps to manage the lifetime
 /// of the content, copying data and constructing memory buffers only as
 /// needed.
-class OutputFile::ContentBuffer {
+class BufferedOutputFile::ContentBuffer {
 public:
   StringRef getBytes() const { return Bytes; }
 
@@ -582,7 +581,7 @@ public:
   /// On disk output settings.
   struct OutputSettings {
     /// Register output files to be deleted if a signal is received. Disabled
-    /// for outputs with \a OutputConfig::getCrashCleanup().
+    /// for outputs with \a OutputConfig::getNoCrashCleanup().
     bool RemoveOnSignal = true;
 
     /// Use stable entity names for \a createUniqueFileImpl() and \a
