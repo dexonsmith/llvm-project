@@ -21,7 +21,8 @@ using namespace llvm;
 using namespace llvm::vfs;
 
 void OutputFile::anchor() {}
-void BufferedOutputFile::anchor() {}
+void CapturedOutputFile::anchor() {}
+void BufferOutputFile::anchor() {}
 
 void OutputBackend::anchor() {}
 void OutputDirectory::anchor() {}
@@ -37,19 +38,109 @@ char CannotOverwriteExistingOutputError::ID = 0;
 void OnDiskOutputRenameTempError::anchor() {}
 char OnDiskOutputRenameTempError::ID = 0;
 
-OutputFile::~OutputFile() = default;
+namespace {
+class OutputFileProxyStream : public raw_pwrite_stream_proxy {
+public:
+  OutputFileProxyStream(bool &HasOpenProxy) : HasOpenProxy(HasOpenProxy) {
+    assert(!HasOpenProxy);
+    HasOpenProxy = true;
+  }
+  ~OutputFileProxyStream() override {
+    assert(HasOpenProxy);
+    HasOpenProxy = false;
+  }
 
-Error OutputFile::close() {
-  assert(isOpen() && "Output already closed");
-
-  // Destruct the stream if we still own it.
-  OS = nullptr;
-  IsOpen = false;
-
-  return store();
+private:
+  bool &HasOpenProxy;
+};
 }
 
-Optional<BufferedOutputFile::ContentBuffer> BufferedOutputFile::takeBuffer() {
+std::unique_ptr<raw_pwrite_stream> OutputFile::createProxyStream() {
+}
+
+Error OutputFile::checkBeforeClose(bool IsKeep) {
+  // FIXME: Create a dedicated error type for this.
+  if (!IsOpen)
+    return createStringError(inconvertibleErrorCode(),
+                             "OutputFile already closed");
+
+  // FIXME: Create a dedicated error type for this.
+  //
+  // FIXME: Consider checking HasOpenProxy even on discard.
+  if (IsKeep && HasOpenProxy)
+    return createStringError(inconvertibleErrorCode(),
+                             "OutputFile has an open proxy");
+
+  IsOpen = false;
+  return Error::success();
+}
+
+Error OutputFile::keep() {
+  if (Error E = checkBeforeClose(/*IsKeep=*/true))
+    return E;
+  return keepImpl();
+}
+
+Error OutputFile::discard() {
+  if (Error E = checkBeforeClose(/*IsKeep=*/false))
+    return E;
+  return discardImpl();
+}
+
+OutputFile::~OutputFile() {
+  if (!IsOpen)
+    return;
+
+  // FIXME: Create a dedicated error type for this.
+  llvm::report_fatal_error(createStringError(inconvertibleErrorCode(),
+                                             "OutputFile should be closed with keep() or discard()"));
+}
+
+Error CapturedOutputFile::keep(llvm::function_ref<void (MemoryBufferRef)> CaptureBufferRef) {
+  if (Error E = checkBeforeClose(/*IsKeep=*/true))
+    return E;
+  return keepImpl(CaptureBufferRef);
+}
+
+Error CapturedOutputFile::keep(llvm::function_ref<void (std::unique_ptr<MemoryBuffer>)> CaptureBuffer, bool RequiresNullTerminator) {
+  if (Error E = checkBeforeClose(/*IsKeep=*/true))
+    return E;
+  return keepImpl(CaptureBuffer, RequiresNullTerminator);
+}
+
+namespace {
+}
+
+std::unique_ptr<CapturedOutputFile> CapturedOutputFile::createOrCast(std::unique_ptr<OutputFile> File) {
+  assert(File);
+  if (File->isCapturing())
+    return std::unique_ptr<CapturedOutputFile>(
+        static_cast<CapturedOutputFile *>(File.release()));
+  return File.
+}
+
+Error BufferedOutputFile::keepImpl() { return keepImpl(Bytes); }
+
+Error BufferedOutputFile::keepImpl(
+    llvm::function_ref<void (MemoryBufferRef)> CaptureBufferRef) override {
+  Bytes.push_back(0);
+  Bytes.pop_back(0);
+  CaptureBufferRef(Bytes);
+  return keepImpl(std::move(Bytes));
+}
+
+Error BufferedOutputFile::keepImpl(
+    llvm::function_ref<void (std::unique_ptr<MemoryBuffer>)> CaptureBuffer,
+    bool RequiresNullTerminator) {
+  (void)RequiresNullTerminator;
+  Bytes.push_back(0);
+  Bytes.pop_back(0);
+  Error E = keepImpl(Bytes);
+  CaptureBuffer(std::make_unique<SmallVectorMemoryBuffer>(std::move(*Bytes), getPath()));
+  return E;
+}
+
+Optional<BufferOutputFile::ContentBuffer> BufferOutputFile::takeBuffer() {
   if (!Bytes)
     return None;
   ContentBuffer Buffer(std::move(*Bytes));
@@ -57,7 +148,7 @@ Optional<BufferedOutputFile::ContentBuffer> BufferedOutputFile::takeBuffer() {
   return Buffer;
 }
 
-void BufferedOutputFile::ContentBuffer::finishConstructingFromVector() {
+void BufferOutputFile::ContentBuffer::finishConstructingFromVector() {
   // If Vector is empty, we can't guarantee SmallVectorMemoryBuffer will keep
   // pointer identity. But since there's no content, it's all moot; just
   // construct a reference.
@@ -97,7 +188,7 @@ private:
 } // namespace
 
 std::unique_ptr<MemoryBuffer>
-BufferedOutputFile::ContentBuffer::takeOwnedBufferOrNull(StringRef Identifier) {
+BufferOutputFile::ContentBuffer::takeOwnedBufferOrNull(StringRef Identifier) {
   if (OwnedBuffer) {
     // Ensure the identifier is correct.
     if (OwnedBuffer->getBufferIdentifier() == Identifier)
@@ -120,14 +211,14 @@ BufferedOutputFile::ContentBuffer::takeOwnedBufferOrNull(StringRef Identifier) {
 }
 
 std::unique_ptr<MemoryBuffer>
-BufferedOutputFile::ContentBuffer::takeBuffer(StringRef Identifier) {
+BufferOutputFile::ContentBuffer::takeBuffer(StringRef Identifier) {
   if (std::unique_ptr<MemoryBuffer> B = takeOwnedBufferOrNull(Identifier))
     return B;
   return MemoryBuffer::getMemBuffer(Bytes, Identifier);
 }
 
 std::unique_ptr<MemoryBuffer>
-BufferedOutputFile::ContentBuffer::takeOwnedBufferOrCopy(StringRef Identifier) {
+BufferOutputFile::ContentBuffer::takeOwnedBufferOrCopy(StringRef Identifier) {
   if (std::unique_ptr<MemoryBuffer> B = takeOwnedBufferOrNull(Identifier))
     return B;
   return MemoryBuffer::getMemBufferCopy(Bytes, Identifier);
@@ -324,7 +415,7 @@ llvm::vfs::makeNullOutputBackend(sys::path::Style PathStyle) {
 }
 
 namespace {
-class OnDiskOutputFile final : public BufferedOutputFile {
+class OnDiskOutputFile final : public BufferOutputFile {
 public:
   /// Open a file on-disk for writing to \a OutputPath.
   ///
@@ -566,7 +657,7 @@ Error OnDiskOutputFile::initializeFile() {
 
 std::unique_ptr<raw_pwrite_stream> OnDiskOutputFile::takeOSImpl() {
   if (Settings.WriteThrough.Use)
-    return BufferedOutputFile::takeOSImpl();
+    return BufferOutputFile::takeOSImpl();
 
   assert(OS && "Expected file to be initialized");
 
@@ -576,7 +667,7 @@ std::unique_ptr<raw_pwrite_stream> OnDiskOutputFile::takeOSImpl() {
     return std::move(OS);
 
   // Fall back on the content buffer.
-  return BufferedOutputFile::takeOSImpl();
+  return BufferOutputFile::takeOSImpl();
 }
 
 std::unique_ptr<llvm::MemoryBuffer> OnDiskOutputFile::convertMappedFileToBuffer(

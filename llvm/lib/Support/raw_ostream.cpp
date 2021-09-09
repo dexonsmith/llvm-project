@@ -988,6 +988,10 @@ void buffer_ostream::anchor() {}
 
 void buffer_unique_ostream::anchor() {}
 
+void raw_ostream_proxy::anchor() {}
+
+void raw_pwrite_stream_proxy::anchor() {}
+
 Error llvm::writeToOutput(StringRef OutputFileName,
                           std::function<Error(raw_ostream &)> Write) {
   if (OutputFileName == "-")

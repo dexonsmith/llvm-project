@@ -24,74 +24,53 @@ namespace vfs {
 
 class OutputBackend;
 
-/// Opaque description of a compiler output that has been created.
-class OutputFile {
+/// A virtualized output file that can write to a specific backend.
+class OutputFile : public raw_pwrite_stream {
   virtual void anchor();
 
 public:
-  /// Close an output, finalizing its content and sending it to the configured
-  /// \a OutputBackend.
+  /// Keep an output, finalizing its content and sending it to the \a
+  /// OutputBackend. Returns \a Error::success() unless an output cannot be
+  /// written.
   ///
-  /// This destructs the stream if it still owns it and writes the output to
-  /// its final destination(s). E.g., for \a OnDiskOutputBackend, any temporary
-  /// files will get moved into place, or for \a InMemoryOutputBackend, the \a
-  /// MemoryBuffer will be created and stored in the \a InMemoryFileSystem.
+  /// This writes the output to its final destination(s). E.g., for \a
+  /// OnDiskOutputBackend, any temporary files will get moved into place.
   ///
-  /// \pre If \a takeOS() has been called, the stream should have been
-  /// destructed before calling this function.
-  /// \pre \a isOpen(); i.e., neither \a erase() nor \a close() has been
-  /// called yet.
-  Error close();
+  /// \pre Neither \a keep() nor \a discard() has been called yet.
+  Error keep();
 
-  /// Check if \a erase() or \a close() has already been called.
+  /// Discard an output, cleaning up any temporary state. Returns \a
+  /// Error::success() unless cleanup fails.
+  ///
+  /// This discards the output. E.g., for \a OnDiskOutputBackend, any temporary
+  /// files will get erased.
+  ///
+  /// \pre Neither \a keep() nor \a discard() has been called yet.
+  Error discard();
+
+protected:
+  virtual Error keepImpl() = 0;
+  virtual Error discardImpl() { return Error::success(); }
+
+  Error checkBeforeClose(bool IsKeep);
+
+public:
+  /// Check if \a keep() or \a discard() has already been called.
   bool isOpen() const { return IsOpen; }
-
-  /// Get a pointer to the output stream, if it hasn't been taken.
-  raw_pwrite_stream *getOS() {
-    initializeStreamOnce();
-    return OS.get();
-  }
-
-  /// Take the output stream. This stream should be destructed before calling
-  /// \a close().
-  ///
-  /// \post \a getOS() returns \c nullptr.
-  std::unique_ptr<raw_pwrite_stream> takeOS() {
-    initializeStreamOnce();
-    return std::move(OS);
-  }
 
   StringRef getPath() const { return Path; }
 
-protected:
-  /// Override to return a custom stream object and have \a close() call \a
-  /// storeStreamedContent(). The default implementation calls \a
-  /// initializeForContentBuffer() and forwards to \a
-  /// createStreamForContentBuffer().
-  virtual std::unique_ptr<raw_pwrite_stream> takeOSImpl() = 0;
-
-  virtual Error store() = 0;
-
-  /// Check if this is /dev/null.
+  /// Check if this is known to be /dev/null. Allows any derived \a OutputFile
+  /// to skip unnecessary work.
   virtual bool isNull() const { return false; }
 
-  /// Allow subclasses to call \a OutputFile::isNull() on other files.
-  static bool isNull(const OutputFile &File) { return File.isNull(); }
+  /// Check if this file is capturing the output.
+  virtual bool isCapturing() const { return false; }
 
-  /// Allow subclasses to destroy the stream (if it's still owned), in case the
-  /// destructor has side effects.
-  void destroyOS() { OS = nullptr; }
+  /// Create a proxy stream that can be passed to consumers that expect to own
+  /// the stream. Must be destroyed before calling \a keep().
+  std::unique_ptr<raw_pwrite_stream> createProxyStream();
 
-private:
-  void initializeStreamOnce() {
-    if (IsStreamInitialized)
-      return;
-    OS = takeOSImpl();
-    IsStreamInitialized = true;
-  }
-
-public:
-  /// Erases the output.
   virtual ~OutputFile();
 
   OutputFile(OutputFile &&O) = delete;
@@ -104,38 +83,75 @@ private:
   /// Output path.
   std::string Path;
 
-  /// Tracks whether the output is still open, before one of \a erase() or \a
-  /// close() is called.
+  /// Tracks whether the output is still open, before one of \a keep() or \a
+  /// discard() is called.
   bool IsOpen = true;
 
-  /// Track whether this has been initialized.
-  bool IsStreamInitialized = false;
-
-  // Destroyed ContentBuffer since it can reference it.
-  std::unique_ptr<raw_pwrite_stream> OS;
+  /// Tracks whether there is a proxy for this stream. Guards against
+  /// flush-after-close.
+  bool HasOpenProxy = false;
 };
 
-class BufferedOutputFile : public OutputFile {
+class CapturedOutputFile : public OutputFile {
   virtual void anchor();
 
 public:
-  class ContentBuffer;
+  using OutputFile::keep;
+  Error keep(llvm::function_ref<void (MemoryBufferRef)> CaptureBufferRef);
+  Error keep(llvm::function_ref<void (std::unique_ptr<MemoryBuffer>)> CaptureBuffer,
+             bool RequiresNullTerminator);
 
 protected:
-  /// Return the stream for OutputFile to manage.
-  virtual std::unique_ptr<raw_pwrite_stream> takeOSImpl() {
-    Bytes = std::make_unique<SmallVector<char, 0>>();
-    return std::make_unique<raw_svector_ostream>(*Bytes);
+  using OutputFile::keepImpl;
+  virtual Error keepImpl(llvm::function_ref<void (MemoryBufferRef)> CaptureBufferRef) = 0;
+  virtual Error keepImpl(llvm::function_ref<void (std::unique_ptr<MemoryBuffer>)> CaptureBuffer,
+                         bool RequiresNullTerminator) {
+    (void)RequiresNullTerminator;
+    return keepImpl([CaptureBuffer](MemoryBufferRef Ref) {
+                    CaptureBuffer(MemoryBuffer::getMemBufferCopy(Ref.getBuffer(),
+                                                                 Ref.getBufferName())));
+    });
   }
 
-  Optional<ContentBuffer> takeBuffer();
+private:
+  Error close();
 
-  explicit BufferedOutputFile(StringRef Path) : OutputFile(Path) {}
+public:
+  bool isCapturing() const override { return true; }
+
+  /// Downcast an existing OutputFile, or create one that can be captured.
+  static std::unique_ptr<CapturedOutputFile> createOrCast(std::unique_ptr<OutputFile> File);
+
+protected:
+  explicit CapturedOutputFile(StringRef Path) : OutputFile(Path.str()) {}
+};
+
+/// A implementation helper for an \a OutputFile that needs to buffer its
+/// output.
+class BufferedOutputFile : public raw_pwrite_stream_proxy_adaptor<CapturedOutputFile> {
+  using AdaptorT = raw_pwrite_stream_proxy_adaptor<CapturedOutputFile>;
+
+  virtual void anchor();
+
+public:
+  explicit BufferedOutputFile(StringRef Path) : AdaptorT(Path), VectorOS(Bytes) {
+    setProxiedOS(&VectorOS);
+  }
+
+protected:
+  Error keepImpl() final;
+  Error keepImpl(llvm::function_ref<void (MemoryBufferRef)> CaptureBufferRef) final;
+  Error keepImpl(llvm::function_ref<void (std::unique_ptr<MemoryBuffer>)> CaptureBuffer,
+                 bool RequiresNullTerminator) final;
+
+  virtual Error keepImpl(StringRef Bytes) {}
+  virtual Error keepImpl(SmallVectorImpl<char> &&Storage) {
+    return keepImpl(StringRef(Storage.begin(), Storage.end()));
+  }
 
 private:
-  /// Behind a pointer in case the output is moved so that the vector has a
-  /// stable address.
-  std::unique_ptr<SmallVector<char, 0>> Bytes;
+  SmallVector<char, 0> Bytes;
+  raw_svector_ostream VectorOS;
 };
 
 class OutputDirectory;
@@ -226,6 +242,31 @@ public:
 
 private:
   sys::path::Style PathStyle;
+};
+
+template <class OutputFileT = OutputFile>
+class OutputFileProxyAdaptor : public raw_pwrite_stream_proxy_adaptor<OutputFileT> {
+  using RawPwriteStreamAdaptorT = raw_pwrite_stream_proxy_adaptor<OutputFileT>;
+protected:
+  virtual Error keepImpl() { return getProxiedOS().keep(); }
+  virtual Error discardImpl() { return getProxiedOS().discard(); }
+
+  OutputFileProxyAdaptor() = default;
+  explicit OutputFileProxyAdaptor(OutputFile *OS) : RawPwriteStreamAdaptorT(OS) {}
+
+  raw_pwrite_stream &getProxiedOS() const {
+    return static_cast<OutputFile &>(RawPwriteStreamAdaptorT::getProxiedOS());
+  }
+  void setProxiedOS(OutputFile &OS) {
+    RawPwriteStreamAdaptorT::setProxiedOS(OS);
+  }
+};
+
+class OutputFileProxy : public OutputFileProxyAdaptor<> {
+  void anchor() override;
+
+public:
+  OutputFileProxy(OutputFile &OS) : OutputFileProxyAdaptor<>(&OS) {}
 };
 
 /// Helper class for creating proxies of another backend.

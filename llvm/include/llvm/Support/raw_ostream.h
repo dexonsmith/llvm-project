@@ -723,6 +723,93 @@ public:
   ~buffer_unique_ostream() override { *OS << str(); }
 };
 
+/// Adaptor for creating a stream that proxies a \a raw_ostream.
+template <class RawOstreamT = raw_ostream>
+class raw_ostream_proxy_adaptor : public RawOstreamT {
+  void anchor() override {}
+
+  void write_impl(const char *Ptr, size_t Size) override {
+    return OS->write(Ptr, Size);
+  }
+  uint64_t current_pos() const override { return OS->current_pos(); }
+  size_t preferred_buffer_size() const override { return OS->preferred_buffer_size(); }
+
+public:
+  void flush() override { OS->flush(); }
+  void reserveExtraSpace(uint64_t ExtraSize) override { OS->reserveExtraSpace(ExtraSize); }
+  raw_ostream &changeColor(enum Colors Color, bool Bold, bool BG) override {
+    OS->changeColor(Color, Bold, BG);
+    return *this;
+  }
+  raw_ostream &resetColor() override {
+    OS->resetColor();
+    return *this;
+  }
+  raw_ostream &reverseColor() override {
+    OS->reverseColor();
+    return *this;
+  }
+  bool is_displayed() const override { return OS->is_displayed(); }
+  bool has_colors() const override { return OS->has_colors(); }
+  void enable_colors(bool enable) override { OS->enable_colors(enable); }
+
+protected:
+  raw_ostream_proxy_adaptor() = default;
+  explicit raw_ostream_proxy_adaptor(raw_ostream *OS) : OS(OS) {}
+
+  void setProxiedOS(raw_ostream &OS) {
+    assert(!this->OS);
+    this->OS = &OS;
+  }
+
+  bool hasProxiedOS() const { return OS; }
+  raw_ostream &getProxiedOS() const { return *OS; }
+
+private:
+  raw_ostream *OS = nullptr;
+};
+
+/// Adaptor for creating a stream that proxies a \a raw_pwrite_stream.
+template <class RawPwriteStreamT = raw_pwrite_stream>
+class raw_pwrite_stream_proxy_adaptor : public raw_ostream_proxy_adaptor<RawPwriteStreamT> {
+  using RawOstreamAdaptorT = raw_ostream_proxy_adaptor<RawPwriteStreamT>;
+
+  void anchor() override {}
+
+  void pwrite_impl(const char *Ptr, size_t Size, uint64_t Offset) override {
+    return static_cast<raw_pwrite_stream *>(OS)->pwrite(Ptr, Size, Offset);
+  }
+
+protected:
+  raw_pwrite_stream_proxy_adaptor() = default;
+  explicit raw_pwrite_stream_proxy_adaptor(raw_pwrite_stream *OS) : RawOstreamAdaptorT(OS) {}
+
+  raw_pwrite_stream &getProxiedOS() const {
+    return static_cast<raw_pwrite_stream &>(RawOstreamAdaptorT::getProxiedOS());
+  }
+  void setProxiedOS(raw_pwrite_stream &OS) {
+    RawOstreamAdaptorT::setProxiedOS(OS);
+  }
+};
+
+/// Non-owning proxy for a \a raw_ostream. Enables passing a stream into of an
+/// API that takes ownership.
+class raw_ostream_proxy : public raw_ostream_proxy_adaptor<> {
+  void anchor() override;
+
+public:
+  raw_ostream_proxy(raw_ostream &OS) : raw_ostream_proxy_adaptor<>(&OS) {}
+};
+
+/// Non-owning proxy for a \a raw_pwrite_stream. Enables passing a stream
+/// into of an API that takes ownership.
+class raw_pwrite_stream_proxy : public raw_pwrite_stream_proxy_adaptor<> {
+  void anchor() override;
+
+public:
+  raw_pwrite_stream_proxy(raw_pwrite_stream &OS) : raw_pwrite_stream_proxy_adaptor<>(&OS) {}
+};
+
 class Error;
 
 /// This helper creates an output stream and then passes it to \p Write.
