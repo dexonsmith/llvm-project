@@ -210,6 +210,12 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
   return UTF16ToUTF8(cur_path.begin(), cur_path.size(), result);
 }
 
+Expected<path::DriveBitset> current_drives() {
+  if (DWORD Bits = ::GetLogicalDrives())
+    return path::DriveBitset(Bits);
+  return errorCodeToError(mapWindowsError(::GetLastError()));
+}
+
 std::error_code set_current_path(const Twine &path) {
   // Convert to utf-16.
   SmallVector<wchar_t, 128> wide_path;

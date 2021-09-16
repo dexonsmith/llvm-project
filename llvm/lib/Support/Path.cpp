@@ -942,6 +942,41 @@ void make_absolute(const Twine &current_directory,
                    "occurred above!");
 }
 
+static Error updateDrives(path::DriveBitset Drives,
+                          path::WorkingDirectoryState &WD) {
+  if (Drives.none())
+    return Error::success();
+  SmallString<256> Path;
+  for (char I = 'A', E = 'Z' + 1; I != E; ++I) {
+    if (!Drives.test(I))
+      continue;
+    Path.clear();
+    Path.push_back(I);
+    Path.push_back(':');
+    if (std::error_code EC = make_absolute(Path))
+      return errorCodeToError(EC);
+    WD.setDriveWorkingDirectory(I, Path);
+  }
+  return Error::success();
+}
+
+Expected<path::WorkingDirectoryState> current_paths() {
+  Expected<path::DriveBitset> Drives = current_drives();
+  if (!Drives)
+    return Drives.takeError();
+
+  path::WorkingDirectoryState WD;
+  if (Drives->any())
+    if (Error E = updateDrives(*Drives, WD))
+      return std::move(E);
+
+  SmallString<256> Path;
+  if (std::error_code EC = current_path(Path))
+    return errorCodeToError(EC);
+  WD.setCurrentWorkingDirectory(Path);
+  return std::move(WD);
+}
+
 std::error_code create_directories(const Twine &Path, bool IgnoreExisting,
                                    perms Perms) {
   SmallString<128> PathStorage;

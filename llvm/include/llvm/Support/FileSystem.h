@@ -36,6 +36,7 @@
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem/UniqueID.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/WorkingDirectoryState.h"
 #include <cassert>
 #include <cstdint>
 #include <ctime>
@@ -362,6 +363,13 @@ void expand_tilde(const Twine &path, SmallVectorImpl<char> &output);
 /// @returns errc::success if the current path has been stored in result,
 ///          otherwise a platform-specific error_code.
 std::error_code current_path(SmallVectorImpl<char> &result);
+
+/// Get the set of active drives. Always empty on posix.
+Expected<path::DriveBitset> current_drives();
+
+/// Get the current directory, including working directories for
+/// active drives.
+Expected<path::WorkingDirectoryState> current_paths();
 
 /// Set the current path.
 ///

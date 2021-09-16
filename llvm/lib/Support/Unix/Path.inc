@@ -394,6 +394,10 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
   return std::error_code();
 }
 
+Expected<path::DriveBitset> current_drives() {
+  return path::DriveBitset{};
+}
+
 std::error_code set_current_path(const Twine &path) {
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
