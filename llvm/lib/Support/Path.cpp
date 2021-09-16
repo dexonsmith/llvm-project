@@ -942,18 +942,6 @@ void make_absolute(const Twine &current_directory,
                    "occurred above!");
 }
 
-std::error_code make_absolute(SmallVectorImpl<char> &path) {
-  if (path::is_absolute(path))
-    return {};
-
-  SmallString<128> current_dir;
-  if (std::error_code ec = current_path(current_dir))
-    return ec;
-
-  make_absolute(current_dir, path);
-  return {};
-}
-
 std::error_code create_directories(const Twine &Path, bool IgnoreExisting,
                                    perms Perms) {
   SmallString<128> PathStorage;

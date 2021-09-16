@@ -222,6 +222,38 @@ std::error_code set_current_path(const Twine &path) {
   return std::error_code();
 }
 
+std::error_code make_absolute(SmallVectorImpl<char> &Path) {
+  if (path::is_absolute(Path))
+    return {};
+
+  if (Path.empty())
+    return current_path(Path);
+
+  SmallVector<wchar_t, 128> WidePath;
+  if (std::error_code EC = widenPath(Path, WidePath))
+    return EC;
+  SmallVector<wchar_t, MAX_PATH> WideFullPath;
+  DWORD Len = MAX_PATH;
+
+  do {
+    WideFullPath.resize_for_overwrite(Len);
+    Len = ::GetFullPathNameW(WidePath.data(), WideFullPath.size(),
+                             WideFullPath.data(), /*lpFilePart=*/nullptr);
+
+    // A zero return value indicates a failure other than insufficient space.
+    if (Len == 0)
+      return mapWindowsError(::GetLastError());
+
+    // If there's insufficient space, the len returned is larger than the len
+    // given.
+  } while (Len > WideFullPath.size());
+
+  // On success, GetFullPathNameW returns the number of characters not
+  // including the null-terminator.
+  Path.resize_for_overwrite(Len);
+  return UTF16ToUTF8(WideFullPath.begin(), WideFullPath.size(), Path);
+}
+
 std::error_code create_directory(const Twine &path, bool IgnoreExisting,
                                  perms Perms) {
   SmallVector<wchar_t, 128> path_utf16;

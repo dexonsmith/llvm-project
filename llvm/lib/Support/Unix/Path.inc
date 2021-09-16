@@ -404,6 +404,18 @@ std::error_code set_current_path(const Twine &path) {
   return std::error_code();
 }
 
+std::error_code make_absolute(SmallVectorImpl<char> &Path) {
+  if (path::is_absolute(Path))
+    return {};
+
+  SmallString<128> CWD;
+  if (std::error_code EC = current_path(CWD))
+    return EC;
+
+  make_absolute(CWD, Path);
+  return {};
+}
+
 std::error_code create_directory(const Twine &path, bool IgnoreExisting,
                                  perms Perms) {
   SmallString<128> path_storage;
