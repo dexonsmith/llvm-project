@@ -228,6 +228,7 @@ add_llvm_component_library(LLVMSupport
   VirtualOutputError.cpp
   VirtualOutputFile.cpp
   WithColor.cpp
+  WorkingDirectoryState.cpp
   X86TargetParser.cpp
   YAMLParser.cpp
   YAMLTraits.cpp
