@@ -288,8 +288,12 @@ void make_absolute(const Twine &current_directory, SmallVectorImpl<char> &path);
 /// Makes \a path absolute using the current directory if it is not already. An
 /// empty \a path will result in the current directory.
 ///
+/// Windows: if \p path has a \a root_name() and it differs from the one for \a
+/// current_directory(), uses the working directory for the correct drive.
+///
 /// /absolute/path   => /absolute/path
 /// relative/../path => <current-directory>/relative/../path
+/// D:relative\..\path => <D:\<D-working-directory>\relative\..\path
 ///
 /// @param path A path that is modified to be an absolute path.
 /// @returns errc::success if \a path has been made absolute, otherwise a
