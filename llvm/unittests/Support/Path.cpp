@@ -69,6 +69,10 @@ struct FileDescriptorCloser {
   int FD;
 };
 
+TEST(system_style, NotNative) {
+  EXPECT_NE(path::Style::native, path::system_style());
+}
+
 TEST(is_separator, Works) {
   EXPECT_TRUE(path::is_separator('/'));
   EXPECT_FALSE(path::is_separator('\0'));
@@ -78,11 +82,8 @@ TEST(is_separator, Works) {
   EXPECT_TRUE(path::is_separator('\\', path::Style::windows));
   EXPECT_FALSE(path::is_separator('\\', path::Style::posix));
 
-#ifdef _WIN32
-  EXPECT_TRUE(path::is_separator('\\'));
-#else
-  EXPECT_FALSE(path::is_separator('\\'));
-#endif
+  EXPECT_EQ(path::system_style() == path::Style::windows,
+            path::is_separator('\\'));
 }
 
 TEST(is_absolute_gnu, Works) {
@@ -107,6 +108,10 @@ TEST(is_absolute_gnu, Works) {
               std::get<1>(Path));
     EXPECT_EQ(path::is_absolute_gnu(std::get<0>(Path), path::Style::windows),
               std::get<2>(Path));
+
+    constexpr int Native = path::system_style() == path::Style::posix ? 1 : 2;
+    EXPECT_EQ(path::is_absolute_gnu(std::get<0>(Path), path::Style::native),
+              std::get<Native>(Path));
   }
 }
 

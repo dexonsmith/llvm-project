@@ -27,6 +27,16 @@ namespace path {
 
 enum class Style { windows, posix, native };
 
+/// Return \a Style::windows or \a Style::posix, whichever one is equivalent to
+/// \a Style::native on the current host.
+constexpr Style system_style() {
+#if defined(_WIN32)
+  return Style::windows;
+#else
+  return Style::posix;
+#endif
+}
+
 /// @name Lexical Component Iterator
 /// @{
 
