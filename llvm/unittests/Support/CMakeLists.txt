@@ -93,6 +93,7 @@ add_llvm_unittest(SupportTests
   VirtualOutputBackendsTest.cpp
   VirtualOutputConfigTest.cpp
   VirtualOutputFileTest.cpp
+  VirtualWorkingDirectoryTest.cpp
   WithColorTest.cpp
   WorkingDirectoryStateTest.cpp
   YAMLIOTest.cpp

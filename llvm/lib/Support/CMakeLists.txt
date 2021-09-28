@@ -222,6 +222,7 @@ add_llvm_component_library(LLVMSupport
   VirtualOutputConfig.cpp
   VirtualOutputError.cpp
   VirtualOutputFile.cpp
+  VirtualWorkingDirectory.cpp
   WithColor.cpp
   WorkingDirectoryState.cpp
   X86TargetParser.cpp
