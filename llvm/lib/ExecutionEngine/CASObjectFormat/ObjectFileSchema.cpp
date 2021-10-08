@@ -1597,14 +1597,86 @@ public:
   struct SymbolInfo {
     Optional<NameRef> Indirect;
     Optional<SymbolRef> Symbol;
+    ArrayRef<const jitlink::Symbol *> NestedDeadStripCompile;
   };
   DenseMap<const jitlink::Symbol *, SymbolInfo> Symbols;
   DenseMap<const jitlink::Block *, BlockRef> Blocks;
 
   SmallVector<SymbolRef> DeadStripNeverSymbols;
   SmallVector<SymbolRef> DeadStripLinkSymbols;
-  SmallVector<SymbolRef> IndirectDeadStripCompileSymbols;
   SmallVector<SymbolRef> IndirectAnonymousSymbols;
+
+  // Goal state: first few references in symbol-table are other symbol-tables
+  // (only used by IndirectDeadLinkCompile). Each nested table contains at
+  // least one symbol, and some number of nested ones.
+  //
+  // Call graph of:
+  //
+  //     e1
+  //     f1->f2->f3->f4
+  //     g1->g2->g4
+  //       ->g3->g4
+  //           ->g5
+  //       ->g4
+  //       ->g5
+  //     h1->f2
+  //       ->g2
+  //       ->h2
+  //
+  // (where all of these belong in IndirectDeadLinkCompile) would result in the
+  // following:
+  //
+  //     symbol-table: IndirectDeadStripCompile
+  //       symbol-table: f1
+  //         symbol-table: f2
+  //           symbol-table: f3
+  //             symbol: f3
+  //             symbol: f4
+  //           symbol: f2
+  //         symbol: f1
+  //       symbol-table: g1
+  //         symbol-table: g2
+  //           symbol: g2
+  //           symbol: g4
+  //         symbol-table: g3
+  //           symbol: g3
+  //           symbol: g4
+  //           symbol: g5
+  //         symbol: g1
+  //       symbol-table: h1
+  //         symbol-table: f2 (same object as above)
+  //         symbol-table: g2 (same object as above)
+  //         symbol: h1
+  //         symbol: h2
+  //       symbol: e1
+  //
+  // Note that 'g4' and 'g5' are skipped from the symbol-table for 'g1' since
+  // they are stored in the nested table(s). But 'g4' needs to be in both 'g2'
+  // and 'g3' because neither is nested in the other.
+  //
+  // These nested symbol tables can be deduped within a build when another
+  // object file calls a subset of the functions (e.g., file2.o might call
+  // f2 directly, and can share f2's symbol table). They can be deduped across
+  // builds when the calling functions change without changing the called
+  // functions (e.g., f1 changes but f2/f3/f4 remain the same).
+  //
+  // Algorithm:
+  //
+  //  1. While defining symbols, build a graph of references between these
+  //     nestable symbols. The graph should be a DAG, just using targets that
+  //     would be direct if not for PreferIndirectSymbolRefs.
+  //  2. Post-order traversal of graph, building symbol tables for nodes that
+  //     directly reference others. Exclude the direct references that are also
+  //     transitive by traversing parent graph to see if there's another route
+  //     (or by building sets of transitive nodes for each thing).
+  //  3. Top-level table works as-if a "root" node had references to all
+  //     symbols in the table.
+  //  4. CompileUnitRef points at the top-level table.
+  //
+  // Then the LinkGraphBuilder needs to do the inverse.
+  SpecificBumpPtrAlloc<const jitlink::Symbol *> NestedDeadStripCompileAlloc;
+  SmallVector<const jitlink::Symbol *> IndirectDeadStripCompileSymbols;
+
   SmallVector<NameRef> StrongExternals;
   SmallVector<NameRef> WeakExternals;
 
