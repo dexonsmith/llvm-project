@@ -39,12 +39,12 @@ function(llvm_create_cross_target project_name target_name toolchain buildtype)
     set(external_clang_dir "-DLLVM_EXTERNAL_CLANG_SOURCE_DIR=${LLVM_EXTERNAL_CLANG_SOURCE_DIR}")
   endif()
 
-  add_custom_command(OUTPUT ${${project_name}_${target_name}_BUILD}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${${project_name}_${target_name}_BUILD}
-    COMMENT "Creating ${${project_name}_${target_name}_BUILD}...")
+  # add_custom_command(OUTPUT ${${project_name}_${target_name}_BUILD}
+  #   COMMAND ${CMAKE_COMMAND} -E make_directory ${${project_name}_${target_name}_BUILD}
+  #   COMMENT "Creating ${${project_name}_${target_name}_BUILD}...")
 
-  add_custom_target(CREATE_${project_name}_${target_name}
-    DEPENDS ${${project_name}_${target_name}_BUILD})
+  # add_custom_target(CREATE_${project_name}_${target_name}
+  #   DEPENDS ${${project_name}_${target_name}_BUILD})
 
   # Escape semicolons in the targets list so that cmake doesn't expand
   # them to spaces.
@@ -65,30 +65,87 @@ function(llvm_create_cross_target project_name target_name toolchain buildtype)
          "-DLLVM_EXTERNAL_${name}_SOURCE_DIR=${LLVM_EXTERNAL_${name}_SOURCE_DIR}")
   endforeach()
 
-  add_custom_command(OUTPUT ${${project_name}_${target_name}_BUILD}/CMakeCache.txt
-    COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}"
-        -DCMAKE_MAKE_PROGRAM="${CMAKE_MAKE_PROGRAM}"
+  # add_custom_command(OUTPUT ${${project_name}_${target_name}_BUILD}/CMakeCache.txt
+  #   COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}"
+  #       -DCMAKE_MAKE_PROGRAM="${CMAKE_MAKE_PROGRAM}"
+  #       ${CROSS_TOOLCHAIN_FLAGS_${target_name}} ${CMAKE_CURRENT_SOURCE_DIR}
+  #       ${CROSS_TOOLCHAIN_FLAGS_${project_name}_${target_name}}
+  #       -DLLVM_TARGET_IS_CROSSCOMPILE_HOST=TRUE
+  #       -DLLVM_TARGETS_TO_BUILD="${targets_to_build_arg}"
+  #       -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="${experimental_targets_to_build_arg}"
+  #       -DLLVM_DEFAULT_TARGET_TRIPLE="${TARGET_TRIPLE}"
+  #       -DLLVM_TARGET_ARCH="${LLVM_TARGET_ARCH}"
+  #       -DLLVM_ENABLE_PROJECTS="${llvm_enable_projects_arg}"
+  #       -DLLVM_EXTERNAL_PROJECTS="${llvm_external_projects_arg}"
+  #       -DLLVM_ENABLE_EXPERIMENTAL_DEPSCAN="${LLVM_ENABLE_EXPERIMENTAL_DEPSCAN}"
+  #       -DLLVM_DEPSCAN_MODE="${LLVM_DEPSCAN_MODE}"
+  #       -DLLVM_ENABLE_EXPERIMENTAL_DEPSCAN_TABLEGEN="${LLVM_ENABLE_EXPERIMENTAL_DEPSCAN_TABLEGEN}"
+  #       ${external_project_source_dirs}
+  #       -DLLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN="${LLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN}"
+  #       ${build_type_flags} ${linker_flag} ${external_clang_dir}
+  #       ${ARGN}
+  #   WORKING_DIRECTORY ${${project_name}_${target_name}_BUILD}
+  #   DEPENDS CREATE_${project_name}_${target_name}
+  #   COMMENT "Configuring ${target_name} ${project_name}...")
+
+  # add_custom_target(CONFIGURE_${project_name}_${target_name}
+  #   DEPENDS ${${project_name}_${target_name}_BUILD}/CMakeCache.txt)
+
+endfunction()
+
+function(llvm_configure_cross_target project_name target_name toolchain buildtype)
+  if (buildtype)
+    set(build_type_flags "-DCMAKE_BUILD_TYPE=${buildtype}")
+  endif()
+  if (LLVM_USE_LINKER AND NOT CMAKE_CROSSCOMPILING)
+    set(linker_flag -DLLVM_USE_LINKER=${LLVM_USE_LINKER})
+  endif()
+  if (LLVM_EXTERNAL_CLANG_SOURCE_DIR)
+    # Propagate LLVM_EXTERNAL_CLANG_SOURCE_DIR so that clang-tblgen can be built
+    set(external_clang_dir -DLLVM_EXTERNAL_CLANG_SOURCE_DIR=${LLVM_EXTERNAL_CLANG_SOURCE_DIR})
+  endif()
+
+  set(external_project_source_dirs)
+  foreach(project ${LLVM_EXTERNAL_PROJECTS})
+    canonicalize_tool_name(${project} name)
+    list(APPEND external_project_source_dirs
+         "-DLLVM_EXTERNAL_${name}_SOURCE_DIR=${LLVM_EXTERNAL_${name}_SOURCE_DIR}")
+  endforeach()
+
+  execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${${project_name}_${target_name}_BUILD})
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} -G ${CMAKE_GENERATOR}
+        -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
         ${CROSS_TOOLCHAIN_FLAGS_${target_name}} ${CMAKE_CURRENT_SOURCE_DIR}
         ${CROSS_TOOLCHAIN_FLAGS_${project_name}_${target_name}}
         -DLLVM_TARGET_IS_CROSSCOMPILE_HOST=TRUE
-        -DLLVM_TARGETS_TO_BUILD="${targets_to_build_arg}"
-        -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="${experimental_targets_to_build_arg}"
-        -DLLVM_DEFAULT_TARGET_TRIPLE="${TARGET_TRIPLE}"
-        -DLLVM_TARGET_ARCH="${LLVM_TARGET_ARCH}"
-        -DLLVM_ENABLE_PROJECTS="${llvm_enable_projects_arg}"
-        -DLLVM_EXTERNAL_PROJECTS="${llvm_external_projects_arg}"
+        -DLLVM_TARGETS_TO_BUILD=${LLVM_TARGETS_TO_BUILD}
+        -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=${LLVM_EXPERIMENTAL_TARGETS_TO_BUILD}
+        -DLLVM_DEFAULT_TARGET_TRIPLE=${TARGET_TRIPLE}
+        -DLLVM_TARGET_ARCH=${LLVM_TARGET_ARCH}
+        -DLLVM_ENABLE_PROJECTS=${LLVM_ENABLE_PROJECTS}
+        -DLLVM_EXTERNAL_PROJECTS=${LLVM_EXTERNAL_PROJECTS}
+        -DLLVM_ENABLE_EXPERIMENTAL_DEPSCAN=${LLVM_ENABLE_EXPERIMENTAL_DEPSCAN}
+        -DLLVM_DEPSCAN_MODE=${LLVM_DEPSCAN_MODE}
+        -DLLVM_ENABLE_EXPERIMENTAL_DEPSCAN_TABLEGEN=${LLVM_ENABLE_EXPERIMENTAL_DEPSCAN_TABLEGEN}
         ${external_project_source_dirs}
-        -DLLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN="${LLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN}"
+        -DLLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN=${LLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN}
         ${build_type_flags} ${linker_flag} ${external_clang_dir}
         ${ARGN}
     WORKING_DIRECTORY ${${project_name}_${target_name}_BUILD}
-    DEPENDS CREATE_${project_name}_${target_name}
-    COMMENT "Configuring ${target_name} ${project_name}...")
+    COMMAND_ECHO STDOUT
+        )
 
-  add_custom_target(CONFIGURE_${project_name}_${target_name}
-    DEPENDS ${${project_name}_${target_name}_BUILD}/CMakeCache.txt)
-
+  string(TOLOWER ${target_name} lower_target_name)
+  llvm_ExternalProject_BuildCmd(build_cmd clean ${${PROJECT_NAME}_${target_name}_BUILD}
+                                CONFIGURATION Release)
+  add_custom_target(clean-${lower_target_name}
+                     COMMAND ${build_cmd}
+                     WORKING_DIRECTORY "${${PROJECT_NAME}_${target_name}_BUILD}"
+                     COMMENT "Cleaning ${target_name}..."
+                     USES_TERMINAL)
 endfunction()
+
 
 # Sets up a native build for a tool, used e.g. for cross-compilation and
 # LLVM_OPTIMIZED_TABLEGEN. Always builds in Release.
@@ -107,9 +164,9 @@ function(build_native_tool target output_path_var)
 
   llvm_ExternalProject_BuildCmd(build_cmd ${target} ${${PROJECT_NAME}_NATIVE_BUILD}
                                 CONFIGURATION Release)
-  add_custom_command(OUTPUT "${output_path}"
+  add_custom_target(native-${target}
                      COMMAND ${build_cmd}
-                     DEPENDS CONFIGURE_${PROJECT_NAME}_NATIVE ${ARG_DEPENDS}
+                     BYPRODUCTS "${output_path}"
                      WORKING_DIRECTORY "${${PROJECT_NAME}_NATIVE_BUILD}"
                      COMMENT "Building native ${target}..."
                      USES_TERMINAL)

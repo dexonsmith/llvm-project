@@ -1190,3 +1190,7 @@ endif()
 if (LLVM_INCLUDE_UTILS AND LLVM_INCLUDE_TOOLS)
   add_subdirectory(utils/llvm-locstats)
 endif()
+
+if(LLVM_USE_HOST_TOOLS)
+  llvm_configure_cross_target(LLVM NATIVE "" Release)
+endif(LLVM_USE_HOST_TOOLS)
