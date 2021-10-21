@@ -587,6 +587,20 @@ public:
     return takeError();
   }
 
+  /// Returns \a takeError() after emplacing the held T into \p MaybeValue, or
+  /// resetting it if there is none.
+  template <class OtherT>
+  Error
+  emplaceInto(Optional<OtherT> &MaybeValue,
+              std::enable_if_t<std::is_constructible<OtherT, T &&>::value> * =
+                  nullptr) {
+    if (*this)
+      MaybeValue.emplace(std::move(get()));
+    else
+      MaybeValue.reset();
+    return takeError();
+  }
+
   /// Check that this Expected<T> is an error of type ErrT.
   template <typename ErrT> bool errorIsA() const {
     return HasError && (*getErrorStorage())->template isA<ErrT>();

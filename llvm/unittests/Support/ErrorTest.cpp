@@ -1099,4 +1099,75 @@ TEST(Error, moveInto) {
   }
 }
 
+struct ConstructOnlyBox {
+  Optional<int> Box;
+
+  explicit ConstructOnlyBox(int I) : Box(I) {}
+  ConstructOnlyBox(ConstructOnlyBox &&) = default;
+
+  ConstructOnlyBox() = delete;
+  ConstructOnlyBox &operator=(ConstructOnlyBox &&) = delete;
+
+  operator MoveOnlyBox() const {
+    return Box ? MoveOnlyBox(*Box) : MoveOnlyBox();
+  }
+
+  bool operator==(const ConstructOnlyBox &RHS) const {
+    if (bool(Box) != bool(RHS.Box))
+      return false;
+    return Box ? *Box == *RHS.Box : false;
+  }
+};
+
+TEST(Error, emplaceInto) {
+  // Use ConstructOnlyBox as the T in Expected<T>. Extract it into an Optional.
+  auto make = [](int I) -> Expected<ConstructOnlyBox> {
+    return ConstructOnlyBox(I);
+  };
+  auto makeFailure = []() -> Expected<ConstructOnlyBox> {
+    return createAnyError();
+  };
+
+  {
+    Optional<ConstructOnlyBox> V;
+
+    // Failure with no prior value.
+    EXPECT_THAT_ERROR(makeFailure().emplaceInto(V), Failed());
+    EXPECT_EQ(None, V);
+
+    // Success with no prior value.
+    EXPECT_THAT_ERROR(make(5).emplaceInto(V), Succeeded());
+    EXPECT_EQ(ConstructOnlyBox(5), V);
+
+    // Success with an existing value.
+    EXPECT_THAT_ERROR(make(7).emplaceInto(V), Succeeded());
+    EXPECT_EQ(ConstructOnlyBox(7), V);
+
+    // Failure with an existing value.
+    EXPECT_THAT_ERROR(makeFailure().emplaceInto(V), Failed());
+    EXPECT_EQ(None, V);
+  }
+
+  // Check that this works with another T.
+  {
+    Optional<MoveOnlyBox> V;
+
+    // Failure with no prior value.
+    EXPECT_THAT_ERROR(makeFailure().emplaceInto(V), Failed());
+    EXPECT_EQ(None, V);
+
+    // Success with no prior value.
+    EXPECT_THAT_ERROR(make(5).emplaceInto(V), Succeeded());
+    EXPECT_EQ(MoveOnlyBox(5), V);
+
+    // Success with an existing value.
+    EXPECT_THAT_ERROR(make(7).emplaceInto(V), Succeeded());
+    EXPECT_EQ(MoveOnlyBox(7), V);
+
+    // Failure with an existing value.
+    EXPECT_THAT_ERROR(makeFailure().emplaceInto(V), Failed());
+    EXPECT_EQ(None, V);
+  }
+}
+
 } // namespace
