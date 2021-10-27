@@ -45,6 +45,8 @@ std::string OutputErrorCategory::message(int EV) const {
     return "output not closed";
   case OutputErrorCode::already_closed:
     return "output already closed";
+  case OutputErrorCode::has_open_proxy:
+    return "output has open proxy";
   }
   llvm_unreachable(
       "An enumerator of OutputErrorCode does not have a message defined.");

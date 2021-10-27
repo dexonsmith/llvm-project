@@ -54,6 +54,9 @@ public:
   }
 
   /// Keep an output. Errors if this fails or it's already closed.
+  ///
+  /// If there's an open proxy from \a createProxy(), errors and calls \a
+  /// discard().
   Error keep();
 
   /// Discard an output, cleaning up any temporary state. Errors if clean-up
@@ -65,6 +68,14 @@ public:
   void discardOnDestroy(unique_function<void(Error E)> Handler) {
     DiscardOnDestroyHandler = std::move(Handler);
   }
+
+  /// Create a proxy stream for clients that need to pass an owned stream to a
+  /// producer. Errors if there's already a proxy. The proxy must be deleted
+  /// before calling \a keep(). The proxy will crash if it's written to after
+  /// calling \a discard().
+  Expected<std::unique_ptr<raw_pwrite_stream>> createProxy();
+
+  bool hasOpenProxy() const { return OpenProxy; }
 
   OutputFile() = default;
 
@@ -88,12 +99,17 @@ private:
     Path = std::move(O.Path);
     Impl = std::move(O.Impl);
     DiscardOnDestroyHandler = std::move(O.DiscardOnDestroyHandler);
+    OpenProxy = O.OpenProxy;
+    O.OpenProxy = nullptr;
     return *this;
   }
 
   std::string Path;
   std::unique_ptr<OutputFileImpl> Impl;
   unique_function<void(Error E)> DiscardOnDestroyHandler;
+
+  class TrackedProxy;
+  TrackedProxy *OpenProxy = nullptr;
 };
 
 /// Update \p File to silently discard itself if it's still open when it's

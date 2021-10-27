@@ -9,15 +9,48 @@
 #include "llvm/Support/VirtualOutputFile.h"
 #include "llvm/Support/VirtualOutputError.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/raw_ostream_proxy.h"
 
 using namespace llvm;
 using namespace llvm::vfs;
 
 void OutputFileImpl::anchor() {}
 
+class OutputFile::TrackedProxy : public raw_pwrite_stream_proxy {
+public:
+  void resetProxy() {
+    TrackingPointer = nullptr;
+    resetProxiedOS();
+  }
+
+  explicit TrackedProxy(TrackedProxy *&TrackingPointer, raw_pwrite_stream &OS)
+      : raw_pwrite_stream_proxy(OS), TrackingPointer(TrackingPointer) {
+    assert(!TrackingPointer && "Expected to add a proxy");
+    TrackingPointer = this;
+  }
+
+  ~TrackedProxy() override { resetProxy(); }
+
+  TrackedProxy *&TrackingPointer;
+};
+
+Expected<std::unique_ptr<raw_pwrite_stream>> OutputFile::createProxy() {
+  if (OpenProxy)
+    return make_error<OutputError>(getPath(), OutputErrorCode::has_open_proxy);
+
+  return std::make_unique<TrackedProxy>(OpenProxy, getOS());
+}
+
 Error OutputFile::keep() {
   if (!Impl)
     return make_error<OutputError>(getPath(), OutputErrorCode::already_closed);
+
+  // If there's an open proxy, discard instead and return an error. The proxy
+  // should be destroyed before calling keep().
+  if (OpenProxy)
+    return joinErrors(
+        make_error<OutputError>(getPath(), OutputErrorCode::has_open_proxy),
+        discard());
 
   Error E = Impl->keep();
   Impl = nullptr;
@@ -28,6 +61,10 @@ Error OutputFile::keep() {
 Error OutputFile::discard() {
   if (!Impl)
     return make_error<OutputError>(getPath(), OutputErrorCode::already_closed);
+
+  // Try to avoid a crash later by flushing any known open proxy now.
+  if (OpenProxy)
+    OpenProxy->resetProxy();
 
   Error E = Impl->discard();
   Impl = nullptr;

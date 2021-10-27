@@ -127,6 +127,27 @@ TEST_P(BackendTest, KeepFlush) {
   EXPECT_THAT_ERROR(Provider->checkKept(FilePath, Data), Succeeded());
 }
 
+TEST_P(BackendTest, KeepFlushProxy) {
+  auto Backend = createBackend();
+  std::string FilePath = Provider->getFilePathToCreate();
+  StringRef Data = "some data";
+  OutputFile O;
+  EXPECT_THAT_ERROR(Backend->createFile(FilePath).moveInto(O), Succeeded());
+  consumeDiscardOnDestroy(O);
+  ASSERT_THAT_ERROR(Provider->checkCreated(FilePath), Succeeded());
+  {
+    std::unique_ptr<raw_pwrite_stream> Proxy;
+    EXPECT_THAT_ERROR(O.createProxy().moveInto(Proxy), Succeeded());
+    *Proxy << Data;
+    EXPECT_THAT_ERROR(Provider->checkWrote(FilePath, Data), Succeeded());
+
+    Proxy->flush();
+    EXPECT_THAT_ERROR(Provider->checkFlushed(FilePath, Data), Succeeded());
+  }
+  EXPECT_THAT_ERROR(O.keep(), Succeeded());
+  EXPECT_THAT_ERROR(Provider->checkKept(FilePath, Data), Succeeded());
+}
+
 TEST_P(BackendTest, KeepEmpty) {
   auto Backend = createBackend();
   std::string FilePath = Provider->getFilePathToCreate();
