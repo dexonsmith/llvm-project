@@ -326,6 +326,8 @@ public:
   IntrusiveRefCntPtr<OutputBackend> createBackend() override {
     auto Backend = makeIntrusiveRefCnt<OnDiskOutputBackend>();
     Backend->Settings = Settings;
+    Backend->VirtualWD.getSettings() =
+        OnDiskOutputBackend::getDefaultVirtualWDSettings();
     return Backend;
   }
   void init() {
@@ -365,6 +367,8 @@ public:
       const OnDiskOutputBackend::OutputSettings &Settings)
       : Settings(Settings) {}
   OnDiskOutputBackend::OutputSettings Settings;
+  VirtualWorkingDirectory::Settings WDSettings =
+      VirtualWorkingDirectory::Settings::getError();
 
   StringMap<FileInfo> Files;
   Error lookupFileInfo(StringRef FilePath, FileInfo *&Info);
