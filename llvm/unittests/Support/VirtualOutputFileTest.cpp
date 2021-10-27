@@ -120,6 +120,20 @@ TEST(VirtualOutputFileTest, destroy) {
   EXPECT_EQ(1, Data.Handled);
 }
 
+TEST(VirtualOutputFileTest, destroyProxy) {
+  MockOutputFileData Data;
+
+  Optional<OutputFile> F(in_place, "some/file/path", createMockOutput(Data));
+  F->discardOnDestroy(Data.getHandler());
+  std::unique_ptr<raw_pwrite_stream> Proxy;
+  EXPECT_THAT_ERROR(F->createProxy().moveInto(Proxy), Succeeded());
+  F.reset();
+#if GTEST_HAS_DEATH_TEST
+  EXPECT_DEATH(*Proxy << "data", "use after reset");
+#endif
+  Proxy.reset();
+}
+
 TEST(VirtualOutputFileTest, discard) {
   StringRef Content = "some data";
   MockOutputFileData Data;
@@ -162,6 +176,41 @@ TEST(VirtualOutputFileTest, discardError) {
   EXPECT_EQ(0, Data.Kept);
   EXPECT_EQ(1, Data.Discarded);
   EXPECT_EQ(0, Data.Handled);
+}
+
+TEST(VirtualOutputFileTest, discardProxy) {
+  StringRef Content = "some data";
+  MockOutputFileData Data;
+  OutputFile F("some/file/path", createMockOutput(Data));
+  F.discardOnDestroy(Data.getHandler());
+
+  std::unique_ptr<raw_pwrite_stream> Proxy;
+  EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+  *Proxy << Content;
+  EXPECT_EQ(Content, Data.V);
+
+  EXPECT_THAT_ERROR(F.discard(), Succeeded());
+  EXPECT_FALSE(F.isOpen());
+  EXPECT_EQ(0, Data.Kept);
+  EXPECT_EQ(1, Data.Discarded);
+}
+
+TEST(VirtualOutputFileTest, discardProxyFlush) {
+  StringRef Content = "some data";
+  MockOutputFileData Data;
+  OutputFile F("some/file/path", createMockOutput(Data));
+  F.discardOnDestroy(Data.getHandler());
+  F.getOS().SetBufferSize(Content.size() * 2);
+
+  std::unique_ptr<raw_pwrite_stream> Proxy;
+  EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+  *Proxy << Content;
+  EXPECT_EQ("", Data.V);
+  EXPECT_THAT_ERROR(F.discard(), Succeeded());
+  EXPECT_EQ(Content, Data.V);
+  EXPECT_FALSE(F.isOpen());
+  EXPECT_EQ(0, Data.Kept);
+  EXPECT_EQ(1, Data.Discarded);
 }
 
 TEST(VirtualOutputFileTest, keep) {
@@ -207,6 +256,83 @@ TEST(VirtualOutputFileTest, keepError) {
   EXPECT_EQ(1, Data.Kept);
   EXPECT_EQ(0, Data.Discarded);
   EXPECT_EQ(0, Data.Handled);
+}
+
+TEST(VirtualOutputFileTest, keepProxy) {
+  StringRef Content = "some data";
+  MockOutputFileData Data;
+  OutputFile F("some/file/path", createMockOutput(Data));
+  F.discardOnDestroy(Data.getHandler());
+
+  std::unique_ptr<raw_pwrite_stream> Proxy;
+  EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+  *Proxy << Content;
+  EXPECT_EQ(Content, Data.V);
+  Proxy.reset();
+  EXPECT_THAT_ERROR(F.keep(), Succeeded());
+  EXPECT_FALSE(F.isOpen());
+  EXPECT_EQ(1, Data.Kept);
+  EXPECT_EQ(0, Data.Discarded);
+}
+
+TEST(VirtualOutputFileTest, keepProxyStillOpen) {
+  StringRef Content = "some data";
+  MockOutputFileData Data;
+  OutputFile F("some/file/path", createMockOutput(Data));
+  F.discardOnDestroy(Data.getHandler());
+
+  std::unique_ptr<raw_pwrite_stream> Proxy;
+  EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+  *Proxy << Content;
+  EXPECT_EQ(Content, Data.V);
+  EXPECT_THAT_ERROR(F.keep(),
+                    FailedWithMessage("some/file/path: output has open proxy"));
+}
+
+TEST(VirtualOutputFileTest, keepProxyFlush) {
+  StringRef Content = "some data";
+  MockOutputFileData Data;
+  OutputFile F("some/file/path", createMockOutput(Data));
+  F.discardOnDestroy(Data.getHandler());
+  F.getOS().SetBufferSize(Content.size() * 2);
+
+  std::unique_ptr<raw_pwrite_stream> Proxy;
+  EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+  *Proxy << Content;
+  EXPECT_EQ("", Data.V);
+  Proxy.reset();
+  EXPECT_THAT_ERROR(F.keep(), Succeeded());
+  EXPECT_EQ(Content, Data.V);
+  EXPECT_FALSE(F.isOpen());
+  EXPECT_EQ(1, Data.Kept);
+  EXPECT_EQ(0, Data.Discarded);
+}
+
+TEST(VirtualOutputFileTest, TwoProxies) {
+  StringRef Content = "some data";
+  MockOutputFileData Data;
+
+  OutputFile F("some/file/path", createMockOutput(Data));
+  F.discardOnDestroy(Data.getHandler());
+
+  // Can't have two open proxies at once.
+  {
+    std::unique_ptr<raw_pwrite_stream> Proxy;
+    EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+    EXPECT_THAT_ERROR(
+        F.createProxy().takeError(),
+        FailedWithMessage("some/file/path: output has open proxy"));
+  }
+  EXPECT_EQ(0, Data.Kept);
+  EXPECT_EQ(0, Data.Discarded);
+
+  // A second proxy after the first closes should work...
+  {
+    std::unique_ptr<raw_pwrite_stream> Proxy;
+    EXPECT_THAT_ERROR(F.createProxy().moveInto(Proxy), Succeeded());
+    *Proxy << Content;
+    EXPECT_EQ(Content, Data.V);
+  }
 }
 
 } // end namespace
