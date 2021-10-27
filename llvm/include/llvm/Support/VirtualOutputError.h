@@ -22,6 +22,7 @@ enum class OutputErrorCode {
   not_closed = 1,
   invalid_config,
   already_closed,
+  has_open_proxy,
 };
 
 inline std::error_code make_error_code(OutputErrorCode EV) {
