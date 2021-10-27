@@ -13,7 +13,6 @@
 #include "llvm/Support/VirtualOutputBackends.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 
@@ -30,6 +29,9 @@ IntrusiveRefCntPtr<OutputBackend> vfs::makeNullOutputBackend() {
       raw_pwrite_stream &getOS() override { return OS; }
       raw_null_ostream OS;
     };
+    Error setCurrentWorkingDirectory(const Twine &Path) override {
+      return Error::success();
+    }
     IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
       return const_cast<NullOutputBackend *>(this);
     }
@@ -240,11 +242,6 @@ Error OnDiskOutputFile::discard() {
     return errorCodeToOutputError(OutputPath, discardPath(OutputPath));
   return errorCodeToTempFileOutputError(*TempPath, OutputPath,
                                         discardPath(*TempPath));
-}
-
-Error OnDiskOutputBackend::makeAbsolute(SmallVectorImpl<char> &Path) const {
-  return errorCodeToOutputError(StringRef(Path.data(), Path.size()),
-                                sys::fs::make_absolute(Path));
 }
 
 Expected<std::unique_ptr<OutputFileImpl>>

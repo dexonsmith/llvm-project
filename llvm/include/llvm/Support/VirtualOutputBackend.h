@@ -35,6 +35,21 @@ public:
   Expected<OutputFile> createFile(const Twine &Path,
                                   Optional<OutputConfig> Config = None);
 
+  /// Set current working directory. Does not affect files already created by
+  /// this backend.
+  ///
+  /// Depending on backend, may have other side effects.
+  ///
+  /// Not thread-safe. See \a withCurrentWorkingDirectory() for a thread-safe
+  /// alternative.
+  virtual Error setCurrentWorkingDirectory(const Twine &Path) = 0;
+
+  /// Return a cloned backend that has a new working directory.
+  ///
+  /// Thread-safe.
+  Expected<IntrusiveRefCntPtr<OutputBackend>>
+  withCurrentWorkingDirectory(const Twine &Path) const;
+
 protected:
   /// Must be thread-safe. Virtual function has a different name than \a
   /// clone() so that implementations can override the return value.

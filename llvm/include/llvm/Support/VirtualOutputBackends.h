@@ -12,6 +12,8 @@
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/Support/VirtualOutputBackend.h"
 #include "llvm/Support/VirtualOutputConfig.h"
+#include "llvm/Support/VirtualWorkingDirectory.h"
+#include "llvm/Support/WorkingDirectoryState.h"
 
 namespace llvm {
 namespace vfs {
@@ -33,7 +35,13 @@ protected:
 
 public:
   /// Resolve an absolute path.
-  Error makeAbsolute(SmallVectorImpl<char> &Path) const;
+  Error makeAbsolute(SmallVectorImpl<char> &Path) const {
+    return VirtualWD.makeAbsolute(Path);
+  }
+
+  Error setCurrentWorkingDirectory(const Twine &Path) override {
+    return VirtualWD.setCurrentWorkingDirectory(Path);
+  }
 
   /// On disk output settings.
   struct OutputSettings {
@@ -49,18 +57,30 @@ public:
     OutputConfig DefaultConfig;
   };
 
+  constexpr static VirtualWorkingDirectory::Settings
+  getDefaultVirtualWDSettings() {
+    return VirtualWorkingDirectory::Settings::getInitLive()
+        .setCanonicalizeKeepDotDot();
+  }
+
   IntrusiveRefCntPtr<OnDiskOutputBackend> clone() const {
     auto Clone = makeIntrusiveRefCnt<OnDiskOutputBackend>();
+    Clone->VirtualWD = VirtualWD;
     Clone->Settings = Settings;
     return Clone;
   }
 
-  OnDiskOutputBackend() = default;
+  OnDiskOutputBackend() : VirtualWD(getDefaultVirtualWDSettings()) {}
 
   /// Settings for this backend.
   ///
   /// Access is not thread-safe.
   OutputSettings Settings;
+
+  /// Virtual directory for this backend.
+  ///
+  /// Access is not thread-safe.
+  VirtualWorkingDirectory VirtualWD;
 };
 
 } // namespace vfs

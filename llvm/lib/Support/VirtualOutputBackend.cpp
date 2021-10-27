@@ -34,3 +34,12 @@ Expected<OutputFile> OutputBackend::createFile(const Twine &Path_,
   assert(Impl && "Expected valid Impl or Error");
   return OutputFile(Path, std::move(Impl));
 }
+
+Expected<IntrusiveRefCntPtr<OutputBackend>>
+OutputBackend::withCurrentWorkingDirectory(const Twine &Path) const {
+  IntrusiveRefCntPtr<OutputBackend> Clone = clone();
+  assert(Clone && "Expected valid clone");
+  if (Error E = Clone->setCurrentWorkingDirectory(Path))
+    return std::move(E);
+  return std::move(Clone);
+}

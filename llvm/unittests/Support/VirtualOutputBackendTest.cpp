@@ -18,8 +18,10 @@ namespace {
 struct MockOutputBackendData {
   int Cloned = 0;
   int FilesCreated = 0;
+  int WDChanged = 0;
   Optional<OutputConfig> LastConfig;
   unique_function<Error()> FileCreator;
+  unique_function<Error()> WDChanger;
 };
 
 struct MockOutputBackend final : public OutputBackend {
@@ -50,6 +52,13 @@ struct MockOutputBackend final : public OutputBackend {
     return consumeDiscardOnDestroy(createFile(OutputPath, Config));
   }
 
+  Error setCurrentWorkingDirectory(const Twine &Path) override {
+    ++Data.WDChanged;
+    if (Data.WDChanger)
+      return Data.WDChanger();
+    return Error::success();
+  }
+
   MockOutputBackend(MockOutputBackendData &Data) : Data(Data) {}
   MockOutputBackendData &Data;
 };
@@ -68,6 +77,7 @@ TEST(VirtualOutputBackendTest, construct) {
   auto B = createMockBackend(Data);
   EXPECT_EQ(0, Data.Cloned);
   EXPECT_EQ(0, Data.FilesCreated);
+  EXPECT_EQ(0, Data.WDChanged);
 }
 
 TEST(VirtualOutputBackendTest, clone) {
@@ -142,6 +152,27 @@ TEST(VirtualOutputBackendTest, createFileError) {
       Backend->createAutoDiscardFile(Twine("dir/file")).takeError(),
       FailedWithMessage("custom error"));
   EXPECT_EQ(1, Data.FilesCreated);
+}
+
+TEST(VirtualOutputBackendTest, setCurrentWorkingDirectory) {
+  MockOutputBackendData Data;
+  auto Backend = createMockBackend(Data);
+
+  // Check that invalid configs don't make it to the backend.
+  EXPECT_THAT_ERROR(Backend->setCurrentWorkingDirectory(Twine("dir/file")),
+                    Succeeded());
+  EXPECT_EQ(1, Data.WDChanged);
+}
+
+TEST(VirtualOutputBackendTest, setCurrentWorkingDirectoryError) {
+  MockOutputBackendData Data;
+  Data.WDChanger = createCustomError;
+  auto Backend = createMockBackend(Data);
+
+  // Check that invalid configs don't make it to the backend.
+  EXPECT_THAT_ERROR(Backend->setCurrentWorkingDirectory(Twine("dir/file")),
+                    FailedWithMessage("custom error"));
+  EXPECT_EQ(1, Data.WDChanged);
 }
 
 } // end namespace
