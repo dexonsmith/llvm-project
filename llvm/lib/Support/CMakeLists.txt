@@ -218,6 +218,7 @@ add_llvm_component_library(LLVMSupport
   VersionTuple.cpp
   VirtualFileSystem.cpp
   VirtualOutputBackend.cpp
+  VirtualOutputBackends.cpp
   VirtualOutputConfig.cpp
   VirtualOutputError.cpp
   VirtualOutputFile.cpp
