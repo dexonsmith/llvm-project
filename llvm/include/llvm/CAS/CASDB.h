@@ -9,6 +9,7 @@
 #ifndef LLVM_CAS_CASDB_H
 #define LLVM_CAS_CASDB_H
 
+#include "llvm/Support/AlignOf.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CAS/CASID.h"
@@ -21,13 +22,418 @@
 namespace llvm {
 namespace cas {
 
-class CASDB;
-
 /// Kind of CAS object.
 enum class ObjectKind {
   Blob, /// Data, with no references.
   Tree, /// Filesystem-style tree, with named references and entry types.
   Node, /// Abstract hierarchical node, with data and references.
+};
+
+class ObjectIDRef {
+public:
+  ArrayRef<uint8_t> getHash() const { return Hash; }
+
+private:
+  ArrayRef<uint8_t> Hash;
+};
+
+class ObjectID {
+public:
+  ArrayRef<uint8_t> getHash() const;
+
+  operator ObjectIDRef() const;
+
+private:
+  union {
+    uint8_t Hash[sizeof(void *)];
+    const uint8_t *Mem;
+  };
+  uint8_t HashRest[20 - sizeof(void *)];
+  bool OwnsMem = true;
+  uint16_t Size = 0;
+};
+static_assert(alignof(ObjectID) == alignof(void *), "");
+static_assert(sizeof(ObjectID) == 24, "");
+
+class FlatObjectIDArrayRef {
+public:
+  class iterator;
+
+  size_t size() const { return Hashes.size() / HashSize; }
+  ObjectIDRef operator[](size_t I) const;
+
+  FlatObjectIDArrayRef(size_t HashSize, ArrayRef<uint8_t> Hashes);
+
+private:
+  size_t HashSize;
+  ArrayRef<uint8_t> Hashes;
+};
+
+class Object {
+  virtual void anchor();
+
+public:
+  virtual ~Object() = default;
+
+  ObjectIDRef getID() const;
+  ObjectKind getKind() const { return Kind; }
+  size_t getHashSize() const { return HashSize; }
+
+protected:
+  void setSubclassData(uint8_t Data) { SubclassData = Data; }
+  uint8_t getSubclassData() const { return SubclassData; }
+
+  void updateIDRef(ObjectIDRef NewID) {
+    assert(getID() == NewID && "Expected same ID, just different address");
+    Hash = NewID.getHash().begin();
+  }
+
+  Object(ObjectKind Kind, ObjectIDRef ID)
+      : Kind(Kind), HashSize(ID.getHash().size()), Hash(ID.getHash().begin()) {}
+
+private:
+  ObjectKind Kind;
+  uint8_t SubclassData = 0;
+  uint16_t HashSize;
+  const uint8_t *Hash;
+};
+
+class Blob : public Object {
+  void anchor() override;
+
+public:
+  virtual StringRef getData() const = 0;
+  bool isNullTerminated() const { return Object::getSubclassData(); }
+
+protected:
+  void setSubclassData(uint8_t Data) = delete;
+  uint8_t getSubclassData() const = delete;
+
+  Blob(ObjectIDRef ID, bool IsNullTerminated) : Object(ObjectKind::Blob, ID) {
+    Object::setSubclassData(IsNullTerminated);
+  }
+};
+
+class BlobRef final : public Blob {
+  void anchor() override;
+
+public:
+  StringRef getData() const override { return Data; }
+
+  BlobRef(ObjectIDRef ID, StringRef Data, bool IsNullTerminated = false)
+      : Blob(ID, IsNullTerminated), Data(Data) {}
+  BlobRef(const Blob &B) : BlobRef(B.getID(), B.getData(), B.isNullTerminated()) {}
+
+private:
+  StringRef Data;
+};
+
+class InlineBlob final : public Blob {
+  void anchor() override;
+
+public:
+  StringRef getData() const override { return Data; }
+
+  InlineBlob(ObjectIDRef ID, StringRef Data, bool IsNullTerminated = false)
+      : Blob(ID, IsNullTerminated), ID(ID), Data(Data.str()) {
+    updateID(this->ID);
+  }
+  InlineBlob(const Blob &B) : BlobRef(B.getID(), B.getData(), B.isNullTerminated()) {}
+
+private:
+  ObjectID ID;
+  std::string Data;
+};
+
+struct ObjectCapture {
+  inline constexpr size_t DefaultMinFileSize = 16 * 1024;
+};
+
+struct BlobCapture {
+  /// Structure for capturing persistent data with the same lifetime as the CAS.
+  struct PersistentData {
+    /// If set to true, \a Data will only be set when \a IsNullTerminated is true.
+    bool RequireNullTerminated = false;
+
+    Optional<bool> IsNullTerminated;
+    Optional<StringRef> Data;
+  };
+
+  /// Structure for capturing data contained in a mapped_file_region.
+  struct MappedFileData {
+    /// Minimum file size for a returned mapped region.
+    size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
+
+    /// If set to true, \a Data will only be set when \a IsNullTerminated is true.
+    bool RequireNullTerminated = false;
+
+    Optional<bool> IsNullTerminated;
+    Optional<StringRef> Data;
+    mapped_file_region File;
+  };
+
+  BlobCapture(raw_ostream &Stream) : Stream(Stream) {}
+
+  /// Default way to capture the content of the blob. Use a raw_svector_ostream
+  /// or raw_string_stream to capture in a vector or string.
+  raw_ostream &Stream;
+
+  /// Set to non-null to capture a StringRef directly, when the CAS can provide one.
+  PersistentData *Persistent = nullptr;
+
+  /// Set to non-null to support capturing data contained in an owned
+  /// mapped_file_region, when the CAS can provide one.
+  MappedFileData *MappedFile = nullptr;
+};
+
+class Node : public Object {
+  void anchor() override;
+public:
+  virtual StringRef getData() const = 0;
+  virtual FlatObjectIDArrayRef getReferences() const = 0;
+  bool hasReferences() const;
+};
+
+class NodeRef final : public Node {
+  void anchor() override;
+  StringRef getData() const override;
+  FlatObjectIDArrayRef getReferences() const override;
+
+private:
+  FlatObjectIDArrayRef Refs;
+  StringRef Data;
+};
+
+class InlineNode final : public Node {
+  void anchor() override;
+  StringRef getData() const override;
+  FlatObjectIDArrayRef getReferences() const override;
+
+private:
+  std::string RefStorage;
+  std::string Data;
+};
+
+class FlatTreeEntryDecoder {
+  virtual void anchor();
+
+public:
+  NamedTreeEntry getEntry(size_t I,
+                          FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+  Optional<NamedTreeEntry> lookupEntry(StringRef Name,
+                                       FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+  Error forEachEntry(function_ref<Error (const NamedTreeEntry &)> Callback,
+                     FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+};
+
+class FlatTreeEntriesRef {
+public:
+  NamedTreeEntry operator[](size_t I) const {
+    return Decoder.get(I);
+  }
+
+  FlatTreeEntriesRef(FlatTreeEntryDecoder &Decoder, FlatObjectIDArrayRef IDs,
+                     ArrayRef<char> OpaqueFlatData);
+
+private:
+  FlatObjectIDArrayRef IDs;
+  ArrayRef<char> OpaqueFlatData;
+  FlatTreeEntryDecoder *Decoder;
+};
+
+class Tree : public Object {
+  void anchor() override;
+
+public:
+  bool isEmpty() const;
+  virtual FlatTreeEntriesRef getEntries() const = 0;
+
+  Tree(ObjectIDRef ID) : Object(ObjectKind::Tree, ID) {}
+};
+
+class TreeRef final : public Tree {
+  void anchor() override;
+
+public:
+  FlatTreeEntriesRef getEntries() const override { return Entries; }
+
+  TreeRef(ObjectIDRef ID, FlatTreeEntriesRef Entries)
+      : Tree(ID), Entries(Entries) {}
+
+private:
+  FlatTreeEntriesRef Entries;
+};
+
+class InlineTree final : public Tree, private FlatTreeEntryDecoder {
+  void anchor() override;
+
+public:
+  FlatTreeEntriesRef getEntries() const override {
+    const auto *HashesStart = reinterpret_cast<const uint8_t *>(IDs.data());
+    FlatObjectIDArrayRef Hashes(getID().size(),
+                                makeArrayRef(HashesStart, HashesStart + IDs.size()));
+    return FlatTreeEntriesRef(*this, Hashes, Data);
+  }
+
+  static InlineTree encode(size_t HashSize, ArrayRef<NamedTreeEntry> Entries);
+  static InlineTree encode(size_t HashSize, FlatTreeEntriesRef Entries);
+
+  static void encodeEntry(const NamedTreeEntry &Entry,
+                          SmallVectorImpl<uint8_t> &FlatIDs,
+                          SmallVectorImpl<char> &FlatEntries,
+                          SmallVectorImpl<char> &FlatNames);
+  static InlineTree encode(FlatTreeEntriesRef FlatIDs,
+                           ArrayRef<char> FlatEntries,
+                           ArrayRef<char> FlatNames);
+  static NamedTreeEntry decodeEntry(size_t I, FlatTreeEntriesRef IDs, StringRef Data);
+
+private:
+  NamedTreeEntry getEntry(size_t I, FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
+  Optional<NamedTreeEntry> lookupEntry(StringRef Name,
+                                       FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
+  Error forEachEntry(function_ref<Error (const NamedTreeEntry &)> Callback,
+                     FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
+
+private:
+  std::string IDs;
+  std::string Data;
+};
+
+struct NodeCapture {
+  /// Structure for capturing persistent data with the same lifetime as the CAS.
+  struct PersistentData {
+    /// If set to true, \a Data will only be set when \a IsNullTerminated is true.
+    bool RequireNullTerminated = false;
+
+    Optional<bool> IsNullTerminated;
+    Optional<StringRef> Data;
+    Optional<FlatObjectIDArrayRef> Refs;
+  };
+
+  /// Structure for capturing data contained in a mapped_file_region.
+  struct MappedFileData : public BlobCapture::MappedFileData {
+    /// Minimum file size for a returned mapped region.
+    size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
+
+    /// If set to true, only returend when \a IsNullTerminated is true.
+    bool RequireNullTerminated = false;
+
+    Optional<bool> IsNullTerminated;
+    Optional<StringRef> Data;
+    Optional<FlatObjectIDArrayRef> Refs;
+    mapped_file_region File;
+  };
+
+  /// Structure for capturing streamed data (the default).
+  struct StreamedData {
+    raw_ostream &Data;
+    SmallVectorImpl<ObjectID> &Refs;
+  };
+
+  NodeCapture(StreamedData &Stream) : Stream(Stream) {}
+  StreamedData &Stream;
+  PersistentData *Persistent = nullptr;
+  MappedFileData *MappedFile = nullptr;
+};
+
+struct TreeCapture {
+  /// Structure for capturing persistent data with the same lifetime as the CAS.
+  struct PersistentData {
+    Optional<TreeRef> Tree;
+  };
+
+  /// Structure for capturing data contained in a mapped_file_region.
+  struct MappedFileData {
+    /// Minimum file size for a returned mapped region.
+    size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
+
+    Optional<TreeRef> Tree;
+    mapped_file_region File;
+  };
+
+  /// Structure for capturing streamed data (the default).
+  struct StreamedData {
+    StringSaver &Strings;
+    SmallVectorImpl<NamedTreeEntry> &Entries;
+  };
+
+  TreeCapture(StreamedData &Stream) : Stream(Stream) {}
+  StreamedData &Stream;
+  PersistentData *Persistent = nullptr;
+  MappedFileData *MappedFile = nullptr;
+};
+
+class InMemoryObjectStore;
+class ObjectStore {
+  virtual void anchor();
+
+public:
+  virtual ~ObjectStore() = default;
+
+  virtual Error putNode(ArrayRef<ObjectIDRef> Refs, StringRef Data, Optional<ObjectID> &ID) = 0;
+  virtual Error putBlob(StringRef Data, Optional<ObjectID> &ID) = 0;
+
+  Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectID> &ID);
+
+  virtual Error getNode(ObjectIDRef ID, std::unique_ptr<Node> &Node) = 0;
+  virtual Error getBlob(ObjectIDRef ID, std::unique_ptr<Blob> &Data);
+  virtual Error captureBlob(ObjectIDRef ID, BlobCapture &Capture) = 0;
+
+  virtual std::unique_ptr<InMemoryObjectStore> createInMemoryLayer();
+};
+
+class InMemoryObjectStore : public ObjectStore {
+  void anchor() override;
+
+public:
+  virtual Error putNode(ArrayRef<ObjectIDRef> Refs, StringRef Data, Optional<ObjectIDRef> &ID) = 0;
+  virtual Error putBlob(StringRef Data, Optional<ObjectIDRef> &ID) = 0;
+
+  Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectIDRef> &ID);
+
+  virtual Error getBlob(ObjectIDRef ID, Blob *&Blob) = 0;
+  virtual Error getNode(ObjectIDRef ID, Node *&Node) = 0;
+};
+
+class ObjectCache {
+  virtual void anchor();
+
+public:
+  virtual ~ObjectCache() = default;
+
+  virtual Error put(StringRef Key, ObjectIDRef Value) = 0;
+  virtual Error put(ObjectIDRef Key, ObjectIDRef Value) = 0;
+
+  virtual Error get(StringRef Key, Optional<ObjectIDRef> &Value) = 0;
+  virtual Error get(StringRef Key, Optional<ObjectIDRef> &Value) = 0;
+  virtual Error get(ObjectIDRef Key, Optional<ObjectID> &Value) = 0;
+  virtual Error get(ObjectIDRef Key, Optional<ObjectID> &Value) = 0;
+};
+
+class CASDB;
+
+/// Wrapper around a raw hash-based identifier for a CAS object.
+class CASID {
+public:
+  ArrayRef<uint8_t> getHash() const { return Hash; }
+
+  friend bool operator==(CASID LHS, CASID RHS) {
+    return LHS.getHash() == RHS.getHash();
+  }
+  friend bool operator!=(CASID LHS, CASID RHS) {
+    return LHS.getHash() != RHS.getHash();
+  }
+
+  CASID() = delete;
+  explicit CASID(ArrayRef<uint8_t> Hash) : Hash(Hash) {}
+  explicit operator ArrayRef<uint8_t>() const { return Hash; }
+
+  friend hash_code hash_value(cas::CASID ID) {
+    return hash_value(ID.getHash());
+  }
+
+private:
+  ArrayRef<uint8_t> Hash;
 };
 
 /// Generic CAS object reference.
