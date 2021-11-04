@@ -1073,8 +1073,7 @@ void Writer::openFile() {
                                FileOutputBuffer::F_executable);
 
   if (!bufferOrErr)
-    error("failed to open " + config->outputFile + ": " +
-          llvm::toString(bufferOrErr.takeError()));
+    error("failed to open " + llvm::toString(bufferOrErr.takeError()));
   else
     buffer = std::move(*bufferOrErr);
 }

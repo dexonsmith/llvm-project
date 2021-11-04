@@ -504,7 +504,7 @@ printInfo(ArrayRef<OwningBinary<Binary>> InputBinaries) {
                                    ? FileOutputBuffer::F_executable
                                    : 0);
   if (!OutFileOrError)
-    reportError(OutputFileName, OutFileOrError.takeError());
+    reportError(OutFileOrError.takeError());
   std::copy(B->getMemoryBufferRef().getBufferStart(),
             B->getMemoryBufferRef().getBufferEnd(),
             OutFileOrError.get()->getBufferStart());

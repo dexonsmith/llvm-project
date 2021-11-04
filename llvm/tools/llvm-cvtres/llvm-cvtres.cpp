@@ -72,10 +72,6 @@ public:
   exit(1);
 }
 
-static void reportError(StringRef Input, std::error_code EC) {
-  reportError(Twine(Input) + ": " + EC.message() + ".\n");
-}
-
 static void error(StringRef Input, Error EC) {
   if (!EC)
     return;
@@ -210,11 +206,8 @@ int main(int Argc, const char **Argv) {
   std::unique_ptr<MemoryBuffer> OutputBuffer =
       error(llvm::object::writeWindowsResourceCOFF(MachineType, Parser,
                                                    DateTimeStamp));
-  auto FileOrErr =
-      FileOutputBuffer::create(OutputFile, OutputBuffer->getBufferSize());
-  if (!FileOrErr)
-    reportError(OutputFile, errorToErrorCode(FileOrErr.takeError()));
-  std::unique_ptr<FileOutputBuffer> FileBuffer = std::move(*FileOrErr);
+  std::unique_ptr<FileOutputBuffer> FileBuffer = error(
+      FileOutputBuffer::create(OutputFile, OutputBuffer->getBufferSize()));
   std::copy(OutputBuffer->getBufferStart(), OutputBuffer->getBufferEnd(),
             FileBuffer->getBufferStart());
   error(FileBuffer->commit());

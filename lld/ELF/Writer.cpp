@@ -2912,8 +2912,7 @@ template <class ELFT> void Writer<ELFT>::openFile() {
       FileOutputBuffer::create(config->outputFile, fileSize, flags);
 
   if (!bufferOrErr) {
-    error("failed to open " + config->outputFile + ": " +
-          llvm::toString(bufferOrErr.takeError()));
+    error("failed to open " + llvm::toString(bufferOrErr.takeError()));
     return;
   }
   buffer = std::move(*bufferOrErr);

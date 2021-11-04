@@ -143,8 +143,7 @@ int main(int Argc, const char **Argv) {
     reportError("empty manifest not written");
   Expected<std::unique_ptr<FileOutputBuffer>> FileOrErr =
       FileOutputBuffer::create(OutputFile, OutputBuffer->getBufferSize());
-  if (!FileOrErr)
-    reportError(OutputFile, errorToErrorCode(FileOrErr.takeError()));
+  error(FileOrErr.takeError());
   std::unique_ptr<FileOutputBuffer> FileBuffer = std::move(*FileOrErr);
   std::copy(OutputBuffer->getBufferStart(), OutputBuffer->getBufferEnd(),
             FileBuffer->getBufferStart());

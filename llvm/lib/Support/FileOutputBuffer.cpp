@@ -49,7 +49,7 @@ public:
     Buffer.unmap();
 
     // Atomically replace the existing file with the new one.
-    return Temp.keep(FinalPath);
+    return createFileError(FinalPath, Temp.keep(FinalPath));
   }
 
   ~OnDiskBuffer() override {
@@ -99,7 +99,7 @@ public:
     std::error_code EC;
     if (auto EC =
             openFileForWrite(FinalPath, FD, CD_CreateAlways, OF_None, Mode))
-      return errorCodeToError(EC);
+      return createFileError(FinalPath, EC);
     raw_fd_ostream OS(FD, /*shouldClose=*/true, /*unbuffered=*/true);
     OS << StringRef((const char *)Buffer.base(), BufferSize);
     return Error::success();
@@ -119,7 +119,7 @@ createInMemoryBuffer(StringRef Path, size_t Size, unsigned Mode) {
   MemoryBlock MB = Memory::allocateMappedMemory(
       Size, nullptr, sys::Memory::MF_READ | sys::Memory::MF_WRITE, EC);
   if (EC)
-    return errorCodeToError(EC);
+    return createFileError(Path, EC);
   return std::make_unique<InMemoryBuffer>(Path, MB, Size, Mode);
 }
 
@@ -128,12 +128,12 @@ createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode) {
   Expected<fs::TempFile> FileOrErr =
       fs::TempFile::create(Path + ".tmp%%%%%%%", Mode);
   if (!FileOrErr)
-    return FileOrErr.takeError();
+    return createFileError(Path, FileOrErr.takeError());
   fs::TempFile File = std::move(*FileOrErr);
 
   if (auto EC = fs::resize_file_before_mapping_readwrite(File.FD, Size)) {
     consumeError(File.discard());
-    return errorCodeToError(EC);
+    return createFileError(Path, EC);
   }
 
   // Mmap it.
@@ -181,7 +181,7 @@ FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
   // destination file and write to it on commit().
   switch (Stat.type()) {
   case fs::file_type::directory_file:
-    return errorCodeToError(errc::is_a_directory);
+    return createFileError(Path, errc::is_a_directory);
   case fs::file_type::regular_file:
   case fs::file_type::file_not_found:
   case fs::file_type::status_error:

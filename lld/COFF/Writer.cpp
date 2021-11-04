@@ -1519,9 +1519,10 @@ template <typename PEHeaderTy> void Writer::writeHeader() {
 }
 
 void Writer::openFile(StringRef path) {
-  buffer = CHECK(
-      FileOutputBuffer::create(path, fileSize, FileOutputBuffer::F_executable),
-      "failed to open " + path);
+  if (Error E = FileOutputBuffer::create(path, fileSize,
+                                         FileOutputBuffer::F_executable)
+                    .moveInto(buffer))
+    fatal("failed to open " + llvm::toString(std::move(E)));
 }
 
 void Writer::createSEHTable() {

@@ -618,9 +618,8 @@ static Error writeELFBinaryToFile(StringRef FilePath, const IFSStub &Stub,
       FileOutputBuffer::create(FilePath, Builder.getSize());
   if (!BufOrError)
     return createStringError(errc::invalid_argument,
-                             toString(BufOrError.takeError()) +
-                                 " when trying to open `" + FilePath +
-                                 "` for writing");
+                             "failed to open " +
+                                 toString(BufOrError.takeError()));
 
   // Write binary to file.
   std::unique_ptr<FileOutputBuffer> FileBuf = std::move(*BufOrError);

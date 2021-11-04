@@ -45,6 +45,8 @@ public:
   /// Otherwise, the file shrinks or grows as necessary based on the value of
   /// \p Size.  It is an error to specify F_modify and Size=-1 if \p FilePath
   /// does not exist.
+  ///
+  /// Returns a \a FileError pointing at \p FilePath on failure.
   static Expected<std::unique_ptr<FileOutputBuffer>>
   create(StringRef FilePath, size_t Size, unsigned Flags = 0);
 
@@ -65,6 +67,8 @@ public:
   /// is called, the file is deleted in the destructor. The optional parameter
   /// is used if it turns out you want the file size to be smaller than
   /// initially requested.
+  ///
+  /// Returns a \a FileError pointing at \a getPath() on failure.
   virtual Error commit() = 0;
 
   /// If this object was previously committed, the destructor just deletes
