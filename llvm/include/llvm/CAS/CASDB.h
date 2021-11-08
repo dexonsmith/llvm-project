@@ -226,13 +226,13 @@ public:
                      FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
 };
 
-class FlatTreeEntriesRef {
+class FlatTreeEntryArrayRef {
 public:
   NamedTreeEntry operator[](size_t I) const {
     return Decoder.get(I);
   }
 
-  FlatTreeEntriesRef(FlatTreeEntryDecoder &Decoder, FlatObjectIDArrayRef IDs,
+  FlatTreeEntryArrayRef(FlatTreeEntryDecoder &Decoder, FlatObjectIDArrayRef IDs,
                      ArrayRef<char> OpaqueFlatData);
 
 private:
@@ -246,7 +246,7 @@ class Tree : public Object {
 
 public:
   bool isEmpty() const;
-  virtual FlatTreeEntriesRef getEntries() const = 0;
+  virtual FlatTreeEntryArrayRef getEntries() const = 0;
 
   Tree(ObjectIDRef ID) : Object(ObjectKind::Tree, ID) {}
 };
@@ -255,37 +255,37 @@ class TreeRef final : public Tree {
   void anchor() override;
 
 public:
-  FlatTreeEntriesRef getEntries() const override { return Entries; }
+  FlatTreeEntryArrayRef getEntries() const override { return Entries; }
 
-  TreeRef(ObjectIDRef ID, FlatTreeEntriesRef Entries)
+  TreeRef(ObjectIDRef ID, FlatTreeEntryArrayRef Entries)
       : Tree(ID), Entries(Entries) {}
 
 private:
-  FlatTreeEntriesRef Entries;
+  FlatTreeEntryArrayRef Entries;
 };
 
 class InlineTree final : public Tree, private FlatTreeEntryDecoder {
   void anchor() override;
 
 public:
-  FlatTreeEntriesRef getEntries() const override {
+  FlatTreeEntryArrayRef getEntries() const override {
     const auto *HashesStart = reinterpret_cast<const uint8_t *>(IDs.data());
     FlatObjectIDArrayRef Hashes(getID().size(),
                                 makeArrayRef(HashesStart, HashesStart + IDs.size()));
-    return FlatTreeEntriesRef(*this, Hashes, Data);
+    return FlatTreeEntryArrayRef(*this, Hashes, Data);
   }
 
   static InlineTree encode(size_t HashSize, ArrayRef<NamedTreeEntry> Entries);
-  static InlineTree encode(size_t HashSize, FlatTreeEntriesRef Entries);
+  static InlineTree encode(size_t HashSize, FlatTreeEntryArrayRef Entries);
 
   static void encodeEntry(const NamedTreeEntry &Entry,
                           SmallVectorImpl<uint8_t> &FlatIDs,
                           SmallVectorImpl<char> &FlatEntries,
                           SmallVectorImpl<char> &FlatNames);
-  static InlineTree encode(FlatTreeEntriesRef FlatIDs,
+  static InlineTree encode(FlatTreeEntryArrayRef FlatIDs,
                            ArrayRef<char> FlatEntries,
                            ArrayRef<char> FlatNames);
-  static NamedTreeEntry decodeEntry(size_t I, FlatTreeEntriesRef IDs, StringRef Data);
+  static NamedTreeEntry decodeEntry(size_t I, FlatTreeEntryArrayRef IDs, StringRef Data);
 
 private:
   NamedTreeEntry getEntry(size_t I, FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
