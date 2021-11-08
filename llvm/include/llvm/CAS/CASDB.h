@@ -24,24 +24,150 @@ namespace cas {
 
 /// Kind of CAS object.
 enum class ObjectKind {
+  Invalid, /// Invalid object kind.
   Blob, /// Data, with no references.
   Tree, /// Filesystem-style tree, with named references and entry types.
   Node, /// Abstract hierarchical node, with data and references.
 };
 
+/// IDs:
+///
+/// ObjectID    - Owned ID    (small Hash optimization)
+/// ObjectRef   - Unowned ID? (wraps ArrayRef<uint8_t>)
+///   or
+/// ObjectIDRef = Unowned ID  (wraps ArrayRef<uint8_t>)
+///
+///
+/// For InMemoryCAS:
+///
+/// Object *    - Common base class. Has ID and hash size.
+/// Blob *      - Get a blob. Adds StringRef for Data.
+/// Node *      - Get a node. Adds StringRef and uint8_t* with flat hash array.
+/// Tree *      - Get a tree. Adds uint8_t* with flat hash array and char* with data.
+///
+/// or:
+///
+/// InMemoryObject *    - Common base class. Has ID and hash size and subclass data.
+/// InMemoryBlob *      - Get a blob. Adds char* for Data (S32|S16=>size).
+/// InMemoryNode *      - Get a node. Adds char* as Blob; Refs in uint8_t* with flat hash array.
+/// InMemoryTree *      - Get a tree. Adds vtable and uint8_t*. S32=>Num.
+///
+/// BlobRef => InMemoryBlob* != nullptr ??
+/// TreeRef => InMemoryTree* != nullptr ??
+/// NodeRef => InMemoryNode* != nullptr ??
+///
+///
+/// Storage:
+/// ========
+///
+/// ObjectStore          - Low-level CAS
+///
+/// InMemoryObjectStore  - CAS that persists in-memory
+///   - standalone: just a CAS on its own
+///   - lifetime: add lifetime to objects from another ObjectStore
+///              (use other ObjectStore CASIDs)
+///
+/// ObjectStoreOverlay   - Layer multiple CAS instances
+///   - front-most CAS is point of truth
+///   - other layer(s) are fallback (on miss, check them)
+///   - optionally, push everywhere
+///
+///
+/// Caching:
+/// ========
+///
+/// ResultCache          - Cache for use with the CAS.
+///   - put: (StringRef, ObjectID) => Error
+///   - get: (StringRef, Optional<ObjectID>) => Error
+///
+///   - shoudl it validate ObjectIDs?
+///
+///
+/// Connecting ObjectStore with ResultCache:
+/// ========================================
+///
+/// ResultCache inherits from ObjectStore?
+///   - provides interface, forwarding to connected CAS?
+///   - awkward for InMemoryObjectStore?
+///
+/// ResultCache has an ObjectStore?
+///   - pass ResultCache if you want both
+///   - getStore().putBlob() to store a blob
+///   - awkward for InMemoryObjectStore? although not impossible.
+///
+/// ResultCache totally independent?
+///   - how are hashes validated?
+///
+///
+/// For the built-in / on-disk CAS and result cache:
+///   - where is the result cache stored?
+
 class ObjectIDRef {
 public:
-  ArrayRef<uint8_t> getHash() const { return Hash; }
+  ArrayRef<uint8_t> getHash() const { return makeArrayRef(Hash, Hash + HashSize); }
+
+  explicit operator bool() const { return Hash; }
+
+  ObjectIDRef() = default;
+  ObjectIDRef(const ObjectIDRef &) = default;
+  explicit ObjectIDRef(ArrayRef<uint8_t> Hash) : Hash(Hash) {}
 
 private:
-  ArrayRef<uint8_t> Hash;
+  const uint8_t *Hash = nullptr;
+  uint32_t SubclassData32 = 0;
+  uint16_t SubclassData16 = 0;
+  ObjectKind Kind = ObjectKind::Invalid;
+  uint8_t HashSize = 0;
+
+protected:
+  void setSubclassData16(uint16_t Data) { SubclassData16 = Data; }
+  void setSubclassData32(uint32_t Data) { SubclassData32 = Data; }
+  uint16_t getSubclassData16() const { return SubclassData16; }
+  uint32_t getSubclassData32() const { return SubclassData32; }
+};
+
+class ObjectRef {
+public:
+  ArrayRef<uint8_t> getHash() const { return makeArrayRef(Hash, Hash + HashSize); }
+
+  explicit operator bool() const { return Hash; }
+
+  ObjectRef() = delete;
+
+private:
+  Object *O;
+};
+
+class Object {
+public:
+  operator ObjectRef() const { return getRef(); }
+  ObjectRef getRef() const { return ObjectRef(getHash()); }
+  ArrayRef<uint8_t> getHash() const { return makeArrayRef(Hash, Hash + HashSize); }
+
+  explicit operator bool() const { return Hash; }
+
+protected:
+  Object() = default;
+  explicit Object(ArrayRef<uint8_t> Hash) : Hash(Hash.begin()), HashSize(Hash.size()) {}
+
+private:
+  const uint8_t *Hash = nullptr;
+  uint16_t HashSize = 0;
+  uint16_t SubclassData16 = 0;
+  uint32_t SubclassData32 = 0;
+
+protected:
+  void setSubclassData16(uint16_t Data) { SubclassData16 = Data; }
+  void setSubclassData32(uint32_t Data) { SubclassData32 = Data; }
+  uint16_t getSubclassData16() const { return SubclassData16; }
+  uint32_t getSubclassData32() const { return SubclassData32; }
 };
 
 class ObjectID {
 public:
   ArrayRef<uint8_t> getHash() const;
 
-  operator ObjectIDRef() const;
+  operator ObjectRef() const;
 
 private:
   union {
@@ -55,14 +181,14 @@ private:
 static_assert(alignof(ObjectID) == alignof(void *), "");
 static_assert(sizeof(ObjectID) == 24, "");
 
-class FlatObjectIDArrayRef {
+class FlatObjectArrayRef {
 public:
   class iterator;
 
   size_t size() const { return Hashes.size() / HashSize; }
-  ObjectIDRef operator[](size_t I) const;
+  ObjectRef operator[](size_t I) const;
 
-  FlatObjectIDArrayRef(size_t HashSize, ArrayRef<uint8_t> Hashes);
+  FlatObjectArrayRef(size_t HashSize, ArrayRef<uint8_t> Hashes);
 
 private:
   size_t HashSize;
@@ -75,7 +201,7 @@ class Object {
 public:
   virtual ~Object() = default;
 
-  ObjectIDRef getID() const;
+  ObjectRef getID() const;
   ObjectKind getKind() const { return Kind; }
   size_t getHashSize() const { return HashSize; }
 
@@ -83,12 +209,12 @@ protected:
   void setSubclassData(uint8_t Data) { SubclassData = Data; }
   uint8_t getSubclassData() const { return SubclassData; }
 
-  void updateIDRef(ObjectIDRef NewID) {
+  void updateIDRef(ObjectRef NewID) {
     assert(getID() == NewID && "Expected same ID, just different address");
     Hash = NewID.getHash().begin();
   }
 
-  Object(ObjectKind Kind, ObjectIDRef ID)
+  Object(ObjectKind Kind, ObjectRef ID)
       : Kind(Kind), HashSize(ID.getHash().size()), Hash(ID.getHash().begin()) {}
 
 private:
@@ -109,7 +235,7 @@ protected:
   void setSubclassData(uint8_t Data) = delete;
   uint8_t getSubclassData() const = delete;
 
-  Blob(ObjectIDRef ID, bool IsNullTerminated) : Object(ObjectKind::Blob, ID) {
+  Blob(ObjectRef ID, bool IsNullTerminated) : Object(ObjectKind::Blob, ID) {
     Object::setSubclassData(IsNullTerminated);
   }
 };
@@ -120,7 +246,7 @@ class BlobRef final : public Blob {
 public:
   StringRef getData() const override { return Data; }
 
-  BlobRef(ObjectIDRef ID, StringRef Data, bool IsNullTerminated = false)
+  BlobRef(ObjectRef ID, StringRef Data, bool IsNullTerminated = false)
       : Blob(ID, IsNullTerminated), Data(Data) {}
   BlobRef(const Blob &B) : BlobRef(B.getID(), B.getData(), B.isNullTerminated()) {}
 
@@ -134,7 +260,7 @@ class InlineBlob final : public Blob {
 public:
   StringRef getData() const override { return Data; }
 
-  InlineBlob(ObjectIDRef ID, StringRef Data, bool IsNullTerminated = false)
+  InlineBlob(ObjectRef ID, StringRef Data, bool IsNullTerminated = false)
       : Blob(ID, IsNullTerminated), ID(ID), Data(Data.str()) {
     updateID(this->ID);
   }
@@ -190,24 +316,24 @@ class Node : public Object {
   void anchor() override;
 public:
   virtual StringRef getData() const = 0;
-  virtual FlatObjectIDArrayRef getReferences() const = 0;
+  virtual FlatObjectArrayRef getReferences() const = 0;
   bool hasReferences() const;
 };
 
 class NodeRef final : public Node {
   void anchor() override;
   StringRef getData() const override;
-  FlatObjectIDArrayRef getReferences() const override;
+  FlatObjectArrayRef getReferences() const override;
 
 private:
-  FlatObjectIDArrayRef Refs;
+  FlatObjectArrayRef Refs;
   StringRef Data;
 };
 
 class InlineNode final : public Node {
   void anchor() override;
   StringRef getData() const override;
-  FlatObjectIDArrayRef getReferences() const override;
+  FlatObjectArrayRef getReferences() const override;
 
 private:
   std::string RefStorage;
@@ -219,11 +345,11 @@ class FlatTreeEntryDecoder {
 
 public:
   NamedTreeEntry getEntry(size_t I,
-                          FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+                          FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const = 0;
   Optional<NamedTreeEntry> lookupEntry(StringRef Name,
-                                       FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+                                       FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const = 0;
   Error forEachEntry(function_ref<Error (const NamedTreeEntry &)> Callback,
-                     FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+                     FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const = 0;
 };
 
 class FlatTreeEntryArrayRef {
@@ -232,11 +358,11 @@ public:
     return Decoder.get(I);
   }
 
-  FlatTreeEntryArrayRef(FlatTreeEntryDecoder &Decoder, FlatObjectIDArrayRef IDs,
+  FlatTreeEntryArrayRef(FlatTreeEntryDecoder &Decoder, FlatObjectArrayRef IDs,
                      ArrayRef<char> OpaqueFlatData);
 
 private:
-  FlatObjectIDArrayRef IDs;
+  FlatObjectArrayRef IDs;
   ArrayRef<char> OpaqueFlatData;
   FlatTreeEntryDecoder *Decoder;
 };
@@ -248,7 +374,7 @@ public:
   bool isEmpty() const;
   virtual FlatTreeEntryArrayRef getEntries() const = 0;
 
-  Tree(ObjectIDRef ID) : Object(ObjectKind::Tree, ID) {}
+  Tree(ObjectRef ID) : Object(ObjectKind::Tree, ID) {}
 };
 
 class TreeRef final : public Tree {
@@ -257,7 +383,7 @@ class TreeRef final : public Tree {
 public:
   FlatTreeEntryArrayRef getEntries() const override { return Entries; }
 
-  TreeRef(ObjectIDRef ID, FlatTreeEntryArrayRef Entries)
+  TreeRef(ObjectRef ID, FlatTreeEntryArrayRef Entries)
       : Tree(ID), Entries(Entries) {}
 
 private:
@@ -270,7 +396,7 @@ class InlineTree final : public Tree, private FlatTreeEntryDecoder {
 public:
   FlatTreeEntryArrayRef getEntries() const override {
     const auto *HashesStart = reinterpret_cast<const uint8_t *>(IDs.data());
-    FlatObjectIDArrayRef Hashes(getID().size(),
+    FlatObjectArrayRef Hashes(getID().size(),
                                 makeArrayRef(HashesStart, HashesStart + IDs.size()));
     return FlatTreeEntryArrayRef(*this, Hashes, Data);
   }
@@ -288,11 +414,11 @@ public:
   static NamedTreeEntry decodeEntry(size_t I, FlatTreeEntryArrayRef IDs, StringRef Data);
 
 private:
-  NamedTreeEntry getEntry(size_t I, FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
+  NamedTreeEntry getEntry(size_t I, FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const override;
   Optional<NamedTreeEntry> lookupEntry(StringRef Name,
-                                       FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
+                                       FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const override;
   Error forEachEntry(function_ref<Error (const NamedTreeEntry &)> Callback,
-                     FlatObjectIDArrayRef IDs, ArrayRef<char> FlatData) const override;
+                     FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const override;
 
 private:
   std::string IDs;
@@ -307,7 +433,7 @@ struct NodeCapture {
 
     Optional<bool> IsNullTerminated;
     Optional<StringRef> Data;
-    Optional<FlatObjectIDArrayRef> Refs;
+    Optional<FlatObjectArrayRef> Refs;
   };
 
   /// Structure for capturing data contained in a mapped_file_region.
@@ -320,7 +446,7 @@ struct NodeCapture {
 
     Optional<bool> IsNullTerminated;
     Optional<StringRef> Data;
-    Optional<FlatObjectIDArrayRef> Refs;
+    Optional<FlatObjectArrayRef> Refs;
     mapped_file_region File;
   };
 
@@ -370,14 +496,14 @@ class ObjectStore {
 public:
   virtual ~ObjectStore() = default;
 
-  virtual Error putNode(ArrayRef<ObjectIDRef> Refs, StringRef Data, Optional<ObjectID> &ID) = 0;
+  virtual Error putNode(ArrayRef<ObjectRef> Refs, StringRef Data, Optional<ObjectID> &ID) = 0;
   virtual Error putBlob(StringRef Data, Optional<ObjectID> &ID) = 0;
 
   Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectID> &ID);
 
-  virtual Error getNode(ObjectIDRef ID, std::unique_ptr<Node> &Node) = 0;
-  virtual Error getBlob(ObjectIDRef ID, std::unique_ptr<Blob> &Data);
-  virtual Error captureBlob(ObjectIDRef ID, BlobCapture &Capture) = 0;
+  virtual Error getNode(ObjectRef ID, std::unique_ptr<Node> &Node) = 0;
+  virtual Error getBlob(ObjectRef ID, std::unique_ptr<Blob> &Data);
+  virtual Error captureBlob(ObjectRef ID, BlobCapture &Capture) = 0;
 
   virtual std::unique_ptr<InMemoryObjectStore> createInMemoryLayer();
 };
@@ -386,13 +512,13 @@ class InMemoryObjectStore : public ObjectStore {
   void anchor() override;
 
 public:
-  virtual Error putNode(ArrayRef<ObjectIDRef> Refs, StringRef Data, Optional<ObjectIDRef> &ID) = 0;
-  virtual Error putBlob(StringRef Data, Optional<ObjectIDRef> &ID) = 0;
+  virtual Error putNode(ArrayRef<ObjectRef> Refs, StringRef Data, Optional<ObjectRef> &ID) = 0;
+  virtual Error putBlob(StringRef Data, Optional<ObjectRef> &ID) = 0;
 
-  Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectIDRef> &ID);
+  Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectRef> &ID);
 
-  virtual Error getBlob(ObjectIDRef ID, Blob *&Blob) = 0;
-  virtual Error getNode(ObjectIDRef ID, Node *&Node) = 0;
+  virtual Error getBlob(ObjectRef ID, Blob *&Blob) = 0;
+  virtual Error getNode(ObjectRef ID, Node *&Node) = 0;
 };
 
 class ObjectCache {
@@ -401,13 +527,13 @@ class ObjectCache {
 public:
   virtual ~ObjectCache() = default;
 
-  virtual Error put(StringRef Key, ObjectIDRef Value) = 0;
-  virtual Error put(ObjectIDRef Key, ObjectIDRef Value) = 0;
+  virtual Error put(StringRef Key, ObjectRef Value) = 0;
+  virtual Error put(ObjectRef Key, ObjectRef Value) = 0;
 
-  virtual Error get(StringRef Key, Optional<ObjectIDRef> &Value) = 0;
-  virtual Error get(StringRef Key, Optional<ObjectIDRef> &Value) = 0;
-  virtual Error get(ObjectIDRef Key, Optional<ObjectID> &Value) = 0;
-  virtual Error get(ObjectIDRef Key, Optional<ObjectID> &Value) = 0;
+  virtual Error get(StringRef Key, Optional<ObjectRef> &Value) = 0;
+  virtual Error get(StringRef Key, Optional<ObjectRef> &Value) = 0;
+  virtual Error get(ObjectRef Key, Optional<ObjectID> &Value) = 0;
+  virtual Error get(ObjectRef Key, Optional<ObjectID> &Value) = 0;
 };
 
 class CASDB;
