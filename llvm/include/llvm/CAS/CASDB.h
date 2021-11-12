@@ -32,20 +32,11 @@ enum class ObjectKind {
 
 /// IDs:
 ///
-/// ObjectID    - Owned ID    (small Hash optimization)
-/// ObjectRef   - Unowned ID? (wraps ArrayRef<uint8_t>)
-///   or
-/// ObjectIDRef = Unowned ID  (wraps ArrayRef<uint8_t>)
+/// UniqueID    - Owned ID    (small Hash optimization)
+/// UniqueIDRef - Unowned ID  (wraps ArrayRef<uint8_t>)
 ///
 ///
-/// For InMemoryCAS:
-///
-/// Object *    - Common base class. Has ID and hash size.
-/// Blob *      - Get a blob. Adds StringRef for Data.
-/// Node *      - Get a node. Adds StringRef and uint8_t* with flat hash array.
-/// Tree *      - Get a tree. Adds uint8_t* with flat hash array and char* with data.
-///
-/// or:
+/// For InMemoryView:
 ///
 /// InMemoryObject *    - Common base class. Has ID and hash size and subclass data.
 /// InMemoryBlob *      - Get a blob. Adds char* for Data (S32|S16=>size).
@@ -60,237 +51,439 @@ enum class ObjectKind {
 /// Storage:
 /// ========
 ///
-/// ObjectStore          - Low-level CAS
+/// ObjectHasher
+///   - Hash objects
+///   - getIdentifier()            => StringRef (e.g., "llvm.builtin.v1[sha1]")
+///   - getUniqueIDSize()          => size_t (e.g., 20)
+///   - identify{Blob,Node,Tree}   => UniqueID
+///   - identify{Blob,Node,Tree}   => UniqueIDRef + out-param: SmallVectorImpl<uint8_t>&
+///   - printID                    => raw_ostream
+///   - Eventually: overloads for identify() with continuation out-param
+///   - Eventually: overloads for identify() with std::future out-param
 ///
-/// InMemoryObjectStore  - CAS that persists in-memory
-///   - standalone: just a CAS on its own
-///   - lifetime: add lifetime to objects from another ObjectStore
-///              (use other ObjectStore CASIDs)
+/// ObjectStore : ObjectHasher
+///   - Store objects
+///   - get{Blob,Node,Tree}        => Out-param: Capture
+///   - create{Blob,Node,Tree}     => Out-param: UniqueID
+///   - create{Blob,Node,Tree}     => Out-param: UniqueID + Capture
+///   - createBlobFromOnDiskPath   => Out-param: UniqueID + Capture
+///   - createBlobFromOpenFile     => Out-param: UniqueID + Capture
+///   - Eventually: overloads with continuation out-param
+///   - Eventually: overloads with std::future out-param
 ///
-/// ObjectStoreOverlay   - Layer multiple CAS instances
-///   - front-most CAS is point of truth
-///   - other layer(s) are fallback (on miss, check them)
-///   - optionally, push everywhere
+/// InMemoryView : ObjectStore
+///   - View of objects; wraps any *other* ObjectStore
+///   - get{Blob,Node,Tree}        => InMemoryBlob*,InMemoryNode*,InMemoryTree*
+///   - create{Blob,Node,Tree}     => InMemoryBlob*,InMemoryNode*,InMemoryTree*
+///   - Eventually: overloads with continuation out-param
+///   - Eventually: overloads with std::future out-param
+///
+/// BuiltinCAS : ObjectStore
+///   - Implements (final) hasher part of API
+///
+/// BuiltinFileBasedCAS : BuiltinCAS
+/// BuiltinDatabaseCAS : BuiltinCAS
+/// (etc.)
+/// BuiltinNullCAS : BuiltinCAS
+///   - get() fails
+///   - create() returns out parameters but has no side effects
+///   - use with InMemoryView for an "in-memory CAS"
 ///
 ///
 /// Caching:
 /// ========
 ///
-/// ResultCache          - Cache for use with the CAS.
-///   - put: (StringRef, ObjectID) => Error
-///   - get: (StringRef, Optional<ObjectID>) => Error
+/// ActionCache
+///   - Constructed with an ObjectHasher?
+///       - Needs to know size of hash?
+///   - getIDSize()                                      => size_t
+///   - put: (StringRef, UniqueIDRef)                    => Error
+///   - get: (StringRef,
+///           SmallVectorImpl<uint8_t> &UniqueIDStorage) => Expected<UniqueIDRef>
+///   - get: (StringRef, Optional<UniqueID>&)            => Expected<UniqueID>
 ///
-///   - shoudl it validate ObjectIDs?
+/// OnDiskActionCache
+///   - Key-value store on disk
+///   - For now: hash StringRef and use OnDiskHashMappedTrie
+///   - Eventually: compare against alternatives
 ///
-///
-/// Connecting ObjectStore with ResultCache:
-/// ========================================
-///
-/// ResultCache inherits from ObjectStore?
-///   - provides interface, forwarding to connected CAS?
-///   - awkward for InMemoryObjectStore?
-///
-/// ResultCache has an ObjectStore?
-///   - pass ResultCache if you want both
-///   - getStore().putBlob() to store a blob
-///   - awkward for InMemoryObjectStore? although not impossible.
-///
-/// ResultCache totally independent?
-///   - how are hashes validated?
+/// InMemoryActionCache
+///   - Key-value store in memory
+///   - For now: hash StringRef and use ThreadSafeHashMappedTrie
+///   - Eventually: compare against sharding + locks
 ///
 ///
-/// For the built-in / on-disk CAS and result cache:
-///   - where is the result cache stored?
+/// Plugins:
+/// ========
+///
+/// - InMemoryView does not have plugins
+///     - Stores mapped memory and provies views of trees/blobs/etc.
+///
+/// - ObjectStorePlugin : ObjectStore
+///     - Move BuiltinCAS and subclasses into a plugin
+///     - Plugins should be out-of-process (in a daemon)
+///     - Use memory mapped IPC to avoid overhead / keep BuiltinCAS fast
+///     - Maybe: add an "in-memory store" plugin that's ephemeral, lasting just
+///       until the daemon shuts down but sharing work as long as the daemon
+///       lives
+///
+/// - ActionCachePlugin : ActionCache
+///     - Move OnDiskActionCache into a plugin
+///     - Plugins should be out-of-process (in a daemon)
+///     - Maybe: add an "in-memory cache" plugin that's ephemeral, lasting just
+///       until the daemon shuts down but sharing work as long as the daemon
+///       lives
+///
 
-class ObjectIDRef {
+class UniqueID;
+class UniqueIDRef;
+class Namespace {
+  virtual void anchor();
+
 public:
-  ArrayRef<uint8_t> getHash() const { return makeArrayRef(Hash, Hash + HashSize); }
+  StringRef getName() const { return Name; }
+  size_t getHashSize() const { return HashSize; }
 
-  explicit operator bool() const { return Hash; }
+  /// Print an ID.
+  virtual void printID(const UniqueIDRef &ID, raw_ostream &OS) const = 0;
 
-  ObjectIDRef() = default;
-  ObjectIDRef(const ObjectIDRef &) = default;
-  explicit ObjectIDRef(ArrayRef<uint8_t> Hash) : Hash(Hash) {}
+  /// Parse an ID.
+  virtual Error parseID(StringRef Reference, UniqueID &ID) const = 0;
 
-private:
-  const uint8_t *Hash = nullptr;
-  uint32_t SubclassData32 = 0;
-  uint16_t SubclassData16 = 0;
-  ObjectKind Kind = ObjectKind::Invalid;
-  uint8_t HashSize = 0;
+  Namespace() = delete;
+  Namespace(Namespace &&) = delete;
+  Namespace(const Namespace &) = delete;
 
 protected:
-  void setSubclassData16(uint16_t Data) { SubclassData16 = Data; }
-  void setSubclassData32(uint32_t Data) { SubclassData32 = Data; }
-  uint16_t getSubclassData16() const { return SubclassData16; }
-  uint32_t getSubclassData32() const { return SubclassData32; }
+  Namespace(StringRef Name, size_t HashSize)
+      : Name(Name.str()), HashSize(HashSize) {
+    assert(HashSize >= sizeof(size_t) && "Expected strong hash");
+  }
+
+private:
+  std::string Name;
+  const size_t HashSize;
+};
+
+class UniqueIDRef {
+public:
+  ArrayRef<uint8_t> getHash() const { return Hash; }
+
+  friend bool operator==(UniqueIDRef LHS, UniqueIDRef RHS) {
+    return &LHS.getNamespace() == &RHS.getNamespace() &&
+           LHS.getHash() == RHS.getHash();
+  }
+  friend bool operator!=(UniqueIDRef LHS, UniqueIDRef RHS) {
+    return !(LHS == RHS);
+  }
+
+  uint64_t getHashValue() const {
+    uint64_t Value = 0;
+    for (size_t I = 0, E = sizeof(uint64_t); I != E; ++I)
+      Value |= ID[I] << (I * 8);
+    return Value;
+  }
+
+  UniqueIDRef() = delete;
+  UniqueIDRef(UniqueIDRef &&) = default;
+  UniqueIDRef(const UniqueIDRef &) = default;
+  UniqueIDRef &operator=(UniqueIDRef &&) = default;
+  UniqueIDRef &operator=(const UniqueIDRef &) = default;
+
+  UniqueIDRef(const Namespace &NS, ArrayRef<uint8_t> Hash) : NS(&NS), Hash(Hash.begin()) {
+    assert(Hash.size() == NS.getHashSize() && "Expected valid hash for namespace");
+  }
+
+  struct DenseMapTombstoneTag {};
+  struct DenseMapEmptyTag {};
+
+  explicit UniqueIDRef(DenseMapTombstoneTag) :
+      : Hash(DenseMapInfo<ArrayRef<uint8_t>>::getTombstoneKey());
+  explicit UniqueIDRef(DenseMapEmptyTag) :
+      : Hash(DenseMapInfo<ArrayRef<uint8_t>>::getEmptyKey());
+
+private:
+  const Namespace *NS;
+  const uint8_t *Hash;
+};
+
+raw_ostream &operator<<(raw_ostream &OS, UniqueIDRef ID) {
+  ID.getNamespace().printID(ID, OS);
+  return OS;
+}
+
+hash_code hash_value(UniqueIDRef ID) { return hash_code(ID.getHashValue()); }
+
+} // namespace cas
+
+template <> struct DenseMapInfo<cas::UniqueIDRef> {
+  static cas::UniqueIDRef getEmptyKey() {
+    return cas::UniqueIDRef(cas::UniqueIDRef::DenseMapEmptyTag{});
+  }
+
+  static cas::UniqueIDRef getTombstoneKey() {
+    return cas::UniqueIDRef(cas::UniqueIDRef::DenseMapTombstoneTag{});
+  }
+
+  static unsigned getHashValue(cas::UniqueIDRef ID) { return ID.getHashValue(); }
+
+  static bool isEqual(cas::UniqueIDRef LHS, cas::UniqueIDRef RHS) {
+    return DenseMapInfo<ArrayRef<uint8_t>>::isEqual(LHS.getHash(),
+                                                    RHS.getHash());
+  }
+};
+
+namespace cas {
+
+/// A unique ID that owns its hash storage. Size on stack is 24B plus the size
+/// of a pointer. Uses the small string optimization for hashes under 24B.
+///
+/// May be uninitialized, possibly because it was moved-away from.
+class UniqueID {
+public:
+  explicit operator bool() const { return NS; }
+
+  const Namespace &getNamespace() const {
+    assert(NS && "Invalid namespace");
+    return *NS;
+  }
+  ArrayRef<uint8_t> getHash() const {
+    const uint8_t *HashPtr = isSmall() ? Storage.Hash : Storage.Mem;
+    return makeArrayRef(HashPtr, HashPtr + getNamespace().getHashSize());
+  }
+
+  operator UniqueIDRef() const { return UniqueIDRef(getNamespace(), getHash()); }
+
+  UniqueID() = default;
+  UniqueID(UniqueID &&ID) { moveImpl(ID); }
+  UniqueID(const UniqueID &ID) {
+    if (ID)
+      copyImpl(ID);
+  }
+
+  UniqueID &operator=(UniqueID &&ID) {
+    destroy();
+    return moveImpl(ID);
+  }
+  UniqueID &operator=(const UniqueID &ID) {
+    if (ID)
+      return copyImpl(ID);
+    destroy();
+    NS = nullptr;
+    return *this;
+  }
+
+  UniqueID(UniqueIDRef ID) { copyImpl(ID); }
+  UniqueID &operator=(UniqueIDRef ID) {
+    return copyImpl(ID);
+  }
+
+  ~UniqueID() { destroy(); }
+
+private:
+  void allocate() {
+    if (!isSmall())
+      Storage.Mem = new uint8_t[NS->getHashSize()];
+  }
+  void destroy() {
+    if (!isSmall())
+      delete[] Storage.Mem;
+  }
+  UniqueID &copyImpl(UniqueIDRef ID) {
+    if (NS != &ID.getNamespace()) {
+      destroy();
+      NS = &ID.getNamespace();
+      allocate();
+    }
+    memcpy(isSmall() ? Storage.Hash : Storage.Mem, Hash, Hash.size());
+    return *this;
+  }
+  UniqueID &moveImpl(UniqueID &ID) {
+    NS = ID.NS;
+    memcpy(&Storage, &ID.Storage, sizeof(Storage));
+    ID.NS = nullptr;
+    memset(&ID.Storage, sizeof(Storage), 0);
+    return *this;
+  }
+  constexpr inline size_t InlineHashSize = 24;
+  bool isSmall() const {
+    return !NS || NS->getNamespace().getHashSize() <= InlineHashSize;
+  }
+
+  const Namespace *NS = nullptr;
+  union {
+    const uint8_t *Mem = nullptr;
+    uint8_t Hash[InlineHashSize];
+  } Storage;
+};
+
+class FlatUniqueIDArrayRef {
+public:
+  class iterator : iterator_facade_base<iterator, std::random_access_iterator_tag, const UniqueIDRef,
+                                        ptrdiff_t, const UniqueIDRef *, UniqueIDRef> {
+    // FIXME: Merge from main, which already has this, and remove this copy's
+    // operator->() in favour of the default implementation in
+    // iterator_facade_base.
+    class PointerProxy {
+      friend iterator;
+      UniqueIDRef ID;
+
+    public:
+      const UniqueIDRef *operator->() const { return &ID; }
+    };
+
+  public:
+    UniqueIDRef operator*() const { return UniqueIDRef(makeArrayRef(I, I + Size)); }
+    PointerProxy operator->() const { return PointerProxy{**this}; }
+    iterator &operator++() { return *this += 1; }
+    iterator &operator--() { return *this -= 1; }
+    iterator &operator+=(ptrdiff_t Diff) {
+      I += Diff * HashSize;
+      return *this;
+    }
+    iterator &operator-=(ptrdiff_t Diff) {
+      I -= Diff * HashSize;
+      return *this;
+    }
+    bool operator<(iterator RHS) const { return I < RHS.I; }
+    ptrdiff_t operator-(iterator RHS) const { return (I - RHS.I) / HashSize; }
+
+  private:
+    friend FlatUniqueIDArrayRef;
+    iterator() = delete;
+    iterator(size_t HashSize, const uint8_t *I) : HashSize(HashSize), I(I) {}
+    size_t HashSize;
+    const uint8_t *I;
+  };
+
+  iterator begin() const { return iterator(HashSize, Hashes.begin()); }
+  iterator end() const { return iterator(HashSize, Hashes.end()); }
+  size_t size() const { return Hashes.size() / HashSize; }
+  bool empty() const { return Hashes.empty(); }
+  UniqueIDRef operator[](ptrdiff_t I) const { return begin()[I]; }
+
+  const Namespace &getNamespace() const { return Namespace; }
+  size_t getHashSize() const { return HashSize; }
+  ArrayRef<uint8_t> getFlatHashes() const { return FlatHashes; }
+
+  FlatUniqueIDArrayRef(const Namespace &NS, ArrayRef<uint8_t> FlatHashes)
+      : NS(&NS), FlatHashes(FlatHashes) {
+    size_t HashSize = NS.getHashSize();
+    assert(FlatHashes.size() / HashSize * HashSize == FlatHashes.size() &&
+           "Expected contiguous hashes");
+  }
+
+private:
+  const Namespace *NS = nullptr;
+  ArrayRef<uint8_t> FlatHashes;
 };
 
 class ObjectRef {
 public:
-  ArrayRef<uint8_t> getHash() const { return makeArrayRef(Hash, Hash + HashSize); }
+  explicit operator bool() const { return NS; }
 
-  explicit operator bool() const { return Hash; }
-
-  ObjectRef() = delete;
-
-private:
-  Object *O;
-};
-
-class Object {
-public:
-  operator ObjectRef() const { return getRef(); }
-  ObjectRef getRef() const { return ObjectRef(getHash()); }
-  ArrayRef<uint8_t> getHash() const { return makeArrayRef(Hash, Hash + HashSize); }
-
-  explicit operator bool() const { return Hash; }
+  const Namespace &getNamespace() const { return *NS; }
+  UniqueIDRef getID() const {
+    return UniqueIDRef(getNamespace(), getHash());
+  }
+  ArrayRef<uint8_t> getHash() const {
+    return makeArrayRef(Hash, Hash + getNamespace().getHashSize());
+  }
 
 protected:
-  Object() = default;
-  explicit Object(ArrayRef<uint8_t> Hash) : Hash(Hash.begin()), HashSize(Hash.size()) {}
+  ObjectRef() = default;
+  explicit ObjectRef(UniqueIDRef ID)
+      : NS(&ID.getNamespace()), Hash(ID.getHash().begin()) {}
 
 private:
+  const Namespace *NS = nullptr;
   const uint8_t *Hash = nullptr;
-  uint16_t HashSize = 0;
-  uint16_t SubclassData16 = 0;
-  uint32_t SubclassData32 = 0;
-
-protected:
-  void setSubclassData16(uint16_t Data) { SubclassData16 = Data; }
-  void setSubclassData32(uint32_t Data) { SubclassData32 = Data; }
-  uint16_t getSubclassData16() const { return SubclassData16; }
-  uint32_t getSubclassData32() const { return SubclassData32; }
 };
 
-class ObjectID {
+class BlobRef : public ObjectRef {
 public:
-  ArrayRef<uint8_t> getHash() const;
-
-  operator ObjectRef() const;
-
-private:
-  union {
-    uint8_t Hash[sizeof(void *)];
-    const uint8_t *Mem;
-  };
-  uint8_t HashRest[20 - sizeof(void *)];
-  bool OwnsMem = true;
-  uint16_t Size = 0;
-};
-static_assert(alignof(ObjectID) == alignof(void *), "");
-static_assert(sizeof(ObjectID) == 24, "");
-
-class FlatObjectArrayRef {
-public:
-  class iterator;
-
-  size_t size() const { return Hashes.size() / HashSize; }
-  ObjectRef operator[](size_t I) const;
-
-  FlatObjectArrayRef(size_t HashSize, ArrayRef<uint8_t> Hashes);
-
-private:
-  size_t HashSize;
-  ArrayRef<uint8_t> Hashes;
-};
-
-class Object {
-  virtual void anchor();
-
-public:
-  virtual ~Object() = default;
-
-  ObjectRef getID() const;
-  ObjectKind getKind() const { return Kind; }
-  size_t getHashSize() const { return HashSize; }
-
-protected:
-  void setSubclassData(uint8_t Data) { SubclassData = Data; }
-  uint8_t getSubclassData() const { return SubclassData; }
-
-  void updateIDRef(ObjectRef NewID) {
-    assert(getID() == NewID && "Expected same ID, just different address");
-    Hash = NewID.getHash().begin();
+  StringRef getData() const { return Data; }
+  ArrayRef<uint8_t> getDataArray() const {
+    const uint8_t *Ptr = reinterpret_cast<const uint8_t *>(Data);
+    return makeArrayRef(Ptr, Ptr + getSize());
   }
 
-  Object(ObjectKind Kind, ObjectRef ID)
-      : Kind(Kind), HashSize(ID.getHash().size()), Hash(ID.getHash().begin()) {}
-
-private:
-  ObjectKind Kind;
-  uint8_t SubclassData = 0;
-  uint16_t HashSize;
-  const uint8_t *Hash;
-};
-
-class Blob : public Object {
-  void anchor() override;
-
-public:
-  virtual StringRef getData() const = 0;
-  bool isNullTerminated() const { return Object::getSubclassData(); }
-
-protected:
-  void setSubclassData(uint8_t Data) = delete;
-  uint8_t getSubclassData() const = delete;
-
-  Blob(ObjectRef ID, bool IsNullTerminated) : Object(ObjectKind::Blob, ID) {
-    Object::setSubclassData(IsNullTerminated);
+  BlobRef() = default;
+  BlobRef(UniqueIDRef ID, StringRef Data) : ObjectRef(ID), Data(Data.data()) {
+    assert(Data.end()[0] == 0 && "Expected null-terminated data");
   }
-};
-
-class BlobRef final : public Blob {
-  void anchor() override;
-
-public:
-  StringRef getData() const override { return Data; }
-
-  BlobRef(ObjectRef ID, StringRef Data, bool IsNullTerminated = false)
-      : Blob(ID, IsNullTerminated), Data(Data) {}
-  BlobRef(const Blob &B) : BlobRef(B.getID(), B.getData(), B.isNullTerminated()) {}
 
 private:
   StringRef Data;
 };
 
-class InlineBlob final : public Blob {
-  void anchor() override;
-
+class NodeRef : public ObjectRef {
 public:
-  StringRef getData() const override { return Data; }
-
-  InlineBlob(ObjectRef ID, StringRef Data, bool IsNullTerminated = false)
-      : Blob(ID, IsNullTerminated), ID(ID), Data(Data.str()) {
-    updateID(this->ID);
+  StringRef getData() const { return Data; }
+  ArrayRef<uint8_t> getDataArray() const {
+    const uint8_t *Ptr = reinterpret_cast<const uint8_t *>(Data);
+    return makeArrayRef(Ptr, Ptr + getSize());
   }
-  InlineBlob(const Blob &B) : BlobRef(B.getID(), B.getData(), B.isNullTerminated()) {}
+
+  FlatUniqueIDArrayRef getHashes() const {
+    return FlatUniqueIDArrayRef(getNamespace(), FlatHashes);
+  }
+
+  NodeRef() = default;
+  NodeRef(UniqueIDRef ID, StringRef Data, FlatUniqueIDArrayRef Hashes)
+       : ObjectRef(ID), Data(Data.data()), FlatHashes(Hashes.getFlatHashes()) {
+    assert(Data.end()[0] == 0 && "Expected null-terminated data");
+    assert(&ID.getNamespace() == &Hashes.getNamespace() &&
+           "Mismatched namespace");
+  }
 
 private:
-  ObjectID ID;
-  std::string Data;
+  StringRef Data;
+  ArrayRef<uint8_t> FlatHashes;
+};
+
+class NodeRef : public ObjectRef {
+public:
+  StringRef getData() const { return StringRef(Data, getSize()); }
+  ArrayRef<uint8_t> getDataArray() const {
+    return makeArrayRef(reinterpret_cast<const uint8_t *>(Data),
+                        reinterpret_cast<const uint8_t *>(Data) + getSize());
+  }
+  uint64_t getSize() const {
+    return uint64_t(getSubclassData32()) | uint64_t(getSubclassData16()) << 32;
+  }
+
+  NodeRef() = default;
+  NodeRef(UniqueIDRef ID, StringRef Data, FlatUniqueIDArrayRef Hashes)
+      : ObjectRef(ID), Data(Data.data()), FlatHashes(Hashes.getFlatHashes()) {
+    assert(ID.getHashSize() == Hashes.getHashSize() &&
+           "Expected ID namespace to match");
+    assert(Data.end()[0] == 0 && "Expected null-terminated data");
+    assert(getSize() == Data.size() && "Ran out of size bits");
+  }
+
+private:
+  const char *Data = nullptr;
+  ArrayRef<uint8_t> FlatHashes;
 };
 
 struct ObjectCapture {
   inline constexpr size_t DefaultMinFileSize = 16 * 1024;
 };
 
+struct ObjectStore {
+  Error getBlob(UniqueIDRef ID,
+                function_ref<BlobCapture (size_t Size, bool IsNullTerminated)>);
+};
+
 struct BlobCapture {
-  /// Structure for capturing persistent data with the same lifetime as the CAS.
-  struct PersistentData {
-    /// If set to true, \a Data will only be set when \a IsNullTerminated is true.
-    bool RequireNullTerminated = false;
-
-    Optional<bool> IsNullTerminated;
-    Optional<StringRef> Data;
-  };
-
   /// Structure for capturing data contained in a mapped_file_region.
-  struct MappedFileData {
+  struct MemoryMapped {
     /// Minimum file size for a returned mapped region.
     size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
 
-    /// If set to true, \a Data will only be set when \a IsNullTerminated is true.
+    /// If set to true, \a Data will only be set when \a IsNullTerminated is
+    /// true.
     bool RequireNullTerminated = false;
 
     Optional<bool> IsNullTerminated;
@@ -304,36 +497,33 @@ struct BlobCapture {
   /// or raw_string_stream to capture in a vector or string.
   raw_ostream &Stream;
 
-  /// Set to non-null to capture a StringRef directly, when the CAS can provide one.
-  PersistentData *Persistent = nullptr;
-
   /// Set to non-null to support capturing data contained in an owned
   /// mapped_file_region, when the CAS can provide one.
-  MappedFileData *MappedFile = nullptr;
+  MemoryMapped *MappedFile = nullptr;
 };
 
 class Node : public Object {
   void anchor() override;
 public:
   virtual StringRef getData() const = 0;
-  virtual FlatObjectArrayRef getReferences() const = 0;
+  virtual FlatUniqueIDArrayRef getReferences() const = 0;
   bool hasReferences() const;
 };
 
 class NodeRef final : public Node {
   void anchor() override;
   StringRef getData() const override;
-  FlatObjectArrayRef getReferences() const override;
+  FlatUniqueIDArrayRef getReferences() const override;
 
 private:
-  FlatObjectArrayRef Refs;
+  FlatUniqueIDArrayRef Refs;
   StringRef Data;
 };
 
 class InlineNode final : public Node {
   void anchor() override;
   StringRef getData() const override;
-  FlatObjectArrayRef getReferences() const override;
+  FlatUniqueIDArrayRef getReferences() const override;
 
 private:
   std::string RefStorage;
@@ -345,11 +535,11 @@ class FlatTreeEntryDecoder {
 
 public:
   NamedTreeEntry getEntry(size_t I,
-                          FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+                          FlatUniqueIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
   Optional<NamedTreeEntry> lookupEntry(StringRef Name,
-                                       FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+                                       FlatUniqueIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
   Error forEachEntry(function_ref<Error (const NamedTreeEntry &)> Callback,
-                     FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const = 0;
+                     FlatUniqueIDArrayRef IDs, ArrayRef<char> FlatData) const = 0;
 };
 
 class FlatTreeEntryArrayRef {
@@ -358,11 +548,11 @@ public:
     return Decoder.get(I);
   }
 
-  FlatTreeEntryArrayRef(FlatTreeEntryDecoder &Decoder, FlatObjectArrayRef IDs,
+  FlatTreeEntryArrayRef(FlatTreeEntryDecoder &Decoder, FlatUniqueIDArrayRef IDs,
                      ArrayRef<char> OpaqueFlatData);
 
 private:
-  FlatObjectArrayRef IDs;
+  FlatUniqueIDArrayRef IDs;
   ArrayRef<char> OpaqueFlatData;
   FlatTreeEntryDecoder *Decoder;
 };
@@ -396,7 +586,7 @@ class InlineTree final : public Tree, private FlatTreeEntryDecoder {
 public:
   FlatTreeEntryArrayRef getEntries() const override {
     const auto *HashesStart = reinterpret_cast<const uint8_t *>(IDs.data());
-    FlatObjectArrayRef Hashes(getID().size(),
+    FlatUniqueIDArrayRef Hashes(getID().size(),
                                 makeArrayRef(HashesStart, HashesStart + IDs.size()));
     return FlatTreeEntryArrayRef(*this, Hashes, Data);
   }
@@ -414,11 +604,11 @@ public:
   static NamedTreeEntry decodeEntry(size_t I, FlatTreeEntryArrayRef IDs, StringRef Data);
 
 private:
-  NamedTreeEntry getEntry(size_t I, FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const override;
+  NamedTreeEntry getEntry(size_t I, FlatUniqueIDArrayRef IDs, ArrayRef<char> FlatData) const override;
   Optional<NamedTreeEntry> lookupEntry(StringRef Name,
-                                       FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const override;
+                                       FlatUniqueIDArrayRef IDs, ArrayRef<char> FlatData) const override;
   Error forEachEntry(function_ref<Error (const NamedTreeEntry &)> Callback,
-                     FlatObjectArrayRef IDs, ArrayRef<char> FlatData) const override;
+                     FlatUniqueIDArrayRef IDs, ArrayRef<char> FlatData) const override;
 
 private:
   std::string IDs;
@@ -433,11 +623,11 @@ struct NodeCapture {
 
     Optional<bool> IsNullTerminated;
     Optional<StringRef> Data;
-    Optional<FlatObjectArrayRef> Refs;
+    Optional<FlatUniqueIDArrayRef> Refs;
   };
 
   /// Structure for capturing data contained in a mapped_file_region.
-  struct MappedFileData : public BlobCapture::MappedFileData {
+  struct MemoryMapped : public BlobCapture::MemoryMapped {
     /// Minimum file size for a returned mapped region.
     size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
 
@@ -446,20 +636,20 @@ struct NodeCapture {
 
     Optional<bool> IsNullTerminated;
     Optional<StringRef> Data;
-    Optional<FlatObjectArrayRef> Refs;
+    Optional<FlatUniqueIDArrayRef> Refs;
     mapped_file_region File;
   };
 
   /// Structure for capturing streamed data (the default).
   struct StreamedData {
     raw_ostream &Data;
-    SmallVectorImpl<ObjectID> &Refs;
+    SmallVectorImpl<UniqueID> &Refs;
   };
 
   NodeCapture(StreamedData &Stream) : Stream(Stream) {}
   StreamedData &Stream;
   PersistentData *Persistent = nullptr;
-  MappedFileData *MappedFile = nullptr;
+  MemoryMapped *MappedFile = nullptr;
 };
 
 struct TreeCapture {
@@ -469,7 +659,7 @@ struct TreeCapture {
   };
 
   /// Structure for capturing data contained in a mapped_file_region.
-  struct MappedFileData {
+  struct MemoryMapped {
     /// Minimum file size for a returned mapped region.
     size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
 
@@ -486,7 +676,7 @@ struct TreeCapture {
   TreeCapture(StreamedData &Stream) : Stream(Stream) {}
   StreamedData &Stream;
   PersistentData *Persistent = nullptr;
-  MappedFileData *MappedFile = nullptr;
+  MemoryMapped *MappedFile = nullptr;
 };
 
 class InMemoryObjectStore;
@@ -496,10 +686,10 @@ class ObjectStore {
 public:
   virtual ~ObjectStore() = default;
 
-  virtual Error putNode(ArrayRef<ObjectRef> Refs, StringRef Data, Optional<ObjectID> &ID) = 0;
-  virtual Error putBlob(StringRef Data, Optional<ObjectID> &ID) = 0;
+  virtual Error putNode(ArrayRef<ObjectRef> Refs, StringRef Data, Optional<UniqueID> &ID) = 0;
+  virtual Error putBlob(StringRef Data, Optional<UniqueID> &ID) = 0;
 
-  Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectID> &ID);
+  Error putNode(ArrayRef<UniqueID> Refs, StringRef Data, Optional<UniqueID> &ID);
 
   virtual Error getNode(ObjectRef ID, std::unique_ptr<Node> &Node) = 0;
   virtual Error getBlob(ObjectRef ID, std::unique_ptr<Blob> &Data);
@@ -515,7 +705,7 @@ public:
   virtual Error putNode(ArrayRef<ObjectRef> Refs, StringRef Data, Optional<ObjectRef> &ID) = 0;
   virtual Error putBlob(StringRef Data, Optional<ObjectRef> &ID) = 0;
 
-  Error putNode(ArrayRef<ObjectID> Refs, StringRef Data, Optional<ObjectRef> &ID);
+  Error putNode(ArrayRef<UniqueID> Refs, StringRef Data, Optional<ObjectRef> &ID);
 
   virtual Error getBlob(ObjectRef ID, Blob *&Blob) = 0;
   virtual Error getNode(ObjectRef ID, Node *&Node) = 0;
@@ -532,7 +722,7 @@ public:
 
   virtual Error get(StringRef Key, Optional<ObjectRef> &Value) = 0;
   virtual Error get(StringRef Key, Optional<ObjectRef> &Value) = 0;
-  virtual Error get(ObjectRef Key, Optional<ObjectID> &Value) = 0;
+  virtual Error get(ObjectRef Key, Optional<UniqueID> &Value) = 0;
   virtual Error get(ObjectRef Key, Optional<ObjectID> &Value) = 0;
 };
 
