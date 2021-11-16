@@ -16,7 +16,31 @@
 namespace llvm {
 namespace vfs {
 
+class FileSystem;
+
 /// A virtual working directory, with support for tracking the live filesystem.
+///
+/// There are three modes.
+///
+/// 1. Virtual working directory.
+///     - virtual WD
+///     - sys::path::Style can be native, windows, or posix.
+///     - makeAbsolute() is virtual (only)
+///     - setCurrentWorkingDirectory() changes virtual WD
+///
+/// 2. Live filesystem.
+///     - no virtual WD
+///     - sys::path::Style is Style::native (always)
+///     - makeAbsolute() calls sys::fs::make_absolute()
+///     - setCurrentWorkingDirectory() calls sys::fs::set_current_path()
+///
+/// 3. Hybrid. (default)
+///     - virtual WD
+///     - sys::path::Style is Style::native (always)
+///     - makeAbsolute() is virtual, but falls back to sys::fs::make_absolute()
+///     - setCurrentWorkingDirectory() changes virtual WD
+///
+///
 ///
 /// \a makeAbsolute() is thread-safe. \a setCurrentWorkingDirectory() is not.
 /// This class can be shared between threads as long as no mutator is called.
@@ -46,153 +70,140 @@ namespace vfs {
 ///   initializeVirtualStateFromSnapshot(), and \a makeAbsolute() calls
 ///   sys::path::make_absolute() if the current working directory is not valid
 ///   for the given path.
+class WorkingDirectory : public llvm::ThreadSafeRefCountedBase<WorkingDirectory> {
+public:
+  using State = sys::path::WorkingDirectoryState;
+  using Style = sys::path::Style;
+
+  virtual Style getPathStyle() const { return Style::native; }
+  virtual Error makeAbsolute(SmallVectorImpl<char> &Path) const = 0;
+  virtual Error getCurrentWorkingDirectory(SmallVectorImpl<char> &Path) const = 0;
+  virtual Expected<State> getCurrentWorkingDirectoryState() const = 0;
+  virtual Error setCurrentWorkingDirectory(const Twine &Path) = 0;
+};
+
+/// Virtual.
+class VirtualWorkingDirectory : public WorkingDirectory {
+public:
+  Style getPathStyle() const override;
+  Error makeAbsolute(SmallVectorImpl<char> &Path) override;
+  Error getCurrentWorkingDirectory(SmallVectorImpl<char> &Path) override;
+  Expected<State> getCurrentWorkingDirectoryState() override;
+  Error setCurrentWorkingDirectory(const Twine &Path) override;
+
+  VirtualWorkingDirectory(Style PathStyle = Style::native);
+
+private:
+  WorkingDirectoryState WD;
+};
+
+// Live filesystem. Style::native.
+class LiveWorkingDirectory final : public WorkingDirectory {
+  Error makeAbsolute(SmallVectorImpl<char> &Path) override;
+  Error getCurrentWorkingDirectory(SmallVectorImpl<char> &Path) override;
+  Expected<State> getCurrentWorkingDirectoryState() override;
+  Error setCurrentWorkingDirectory(const Twine &Path) override;
+};
+
+// Live vfs::FileSystem. Style matches the VFS.
+class LiveWorkingDirectoryUsingVFS final : public WorkingDirectory {
+  Error makeAbsolute(SmallVectorImpl<char> &Path) override;
+  Error getCurrentWorkingDirectory(SmallVectorImpl<char> &Path) override;
+  Expected<State> getCurrentWorkingDirectoryState() override;
+  Error setCurrentWorkingDirectory(const Twine &Path) override;
+
+private:
+  IntrusiveRefCntPtr<vfs::FileSystem> FS;
+};
+
+// Virtual, with a fallback to another WD. Style matches the fallback.
+class FallbackWorkingDirectory final : public VirtualWorkingDirectory {
+public:
+  Error makeAbsolute(SmallVectorImpl<char> &Path) override {
+    if (errorToBool(VirtualWorkingDirectory::makeAbsolute(Path)))
+      return FallbackWD.makeAbsolute(Path);
+    return Error::success();
+  }
+
+  FallbackWorkingDirectory(const WorkingDirectory &Fallback) :
+      VirtualWorkingDirectory(Fallback.getPathStyle()) {}
+
+private:
+  const WorkingDirectory &Fallback;
+};
+
 class VirtualWorkingDirectory {
 public:
-  /// How to initialize the working directory state in \a
-  /// setCurrentWorkingDirectory() if there's no virtual state.
-  enum InitializeWorkingDirectory {
-    /// Error.
-    IWD_Error,
-    /// Don't initialize virtual state. Call \a sys::fs::set_current_path().
-    IWD_Live,
-    /// Construct an empty virtual working directory.
-    IWD_Empty,
-    /// Construct a virtual working directory from \a
-    /// sys::fs::current_paths().
-    IWD_Snapshot,
-  };
-  /// How to guess an unknown working directory.
-  enum AssumeWorkingDirectory {
-    /// Error.
-    AWD_Error,
-    /// Assume path is relative to the root.
-    AWD_Root,
-    /// Defer to the live filesystem and call \a sys::fs::make_absolute().
-    AWD_Live,
-  };
-  /// How to clean the working directory path when setting it.
-  enum CanonicalizeWorkingDirectory {
-    /// Leave it in raw form.
-    ///
-    /// \code "/a/b/.//c/../" => "/a/b/.//c/../" /endcode
-    CWD_Raw,
-    /// Canonicalize, but keep ".." components. This matches the semantics of
-    /// the POSIX \a ::chdir() system call.
-    ///
-    /// \code "/a/b/.//c/../" => "/a/b/c/.." /endcode
-    CWD_KeepDotDot,
-    /// Canonicalize, removing ".." components. This matches POSIX shell
-    /// behaviour when calling \c cd on the commandline.
-    ///
-    /// \code "/a/b/.//c/../" => "/a/b" /endcode
-    CWD_RemoveDotDot,
+  using WorkingDirectoryState = sys::path::WorkingDirectoryState;
+  using Style = sys::path::Style;
+
+  enum Mode {
+    Virtual, // Mutate and access the virtual WD.
+    Live,    // Mutate and access the live filesystem.
+    Hybrid,  // Mutate the virtual WD; access both.
   };
 
-  struct Settings {
-    InitializeWorkingDirectory InitOnSet = IWD_Error;
-    struct {
-      AssumeWorkingDirectory Virtual = AWD_Error;
-      AssumeWorkingDirectory NoVirtual = AWD_Error;
-    } AssumeForUnknown;
-    CanonicalizeWorkingDirectory CanonicalizeOnSet = CWD_Raw;
+  Mode getMode() const { return M; }
 
-    bool operator==(const Settings &RHS) const {
-      return InitOnSet == RHS.InitOnSet &&
-             AssumeForUnknown.Virtual == RHS.AssumeForUnknown.Virtual &&
-             AssumeForUnknown.NoVirtual == RHS.AssumeForUnknown.NoVirtual &&
-             CanonicalizeOnSet == RHS.CanonicalizeOnSet;
-    }
-    bool operator!=(const Settings &RHS) const { return !operator==(RHS); }
-
-    constexpr Settings &setCanonicalizeKeepDotDot() {
-      CanonicalizeOnSet = CWD_KeepDotDot;
-      return *this;
-    }
-    constexpr Settings &setCanonicalizeRemoveDotDot() {
-      CanonicalizeOnSet = CWD_RemoveDotDot;
-      return *this;
-    }
-
-    constexpr static Settings getError() { return Settings(); }
-
-    constexpr static Settings getVirtual() {
-      Settings S;
-      S.InitOnSet = IWD_Empty;
-      return S;
-    }
-
-    constexpr static Settings getInitLive() {
-      Settings S;
-      S.InitOnSet = IWD_Live;
-      S.AssumeForUnknown.NoVirtual = AWD_Live;
-      return S;
-    }
-
-  private:
-    constexpr Settings() {}
-  };
-
-  Settings &getSettings() { return S; }
-  const Settings &getSettings() const { return S; }
+  Style getPathStyle() const {
+    return M == Virtual ? VirtualWD.getPathStyle() : Style::native;
+  }
 
   /// Make \p Path absolute.
-  ///
-  /// If \a hasVirtualState(), calls \a
-  /// sys::path::WorkingDirectoryState::makeAbsolute(), handling an unknown
-  /// working directory depending on \a
-  /// Settings::AssumeForUnknown::Virtual.
-  ///
-  /// Else, may call \a sys::fs::make_absolute(), depending on
-  /// Settings::AssumeForUnknown::NoVirtual.
-  ///
-  /// Thread-safe.
   Error makeAbsolute(SmallVectorImpl<char> &Path) const;
 
   /// Set the current working directory to \p Path.
-  ///
-  /// If \a hasVirtualState(), it will make \p Path absolute using \a
-  /// makeAbsolute(), canonicalize it depending on \a
-  /// Settings::CanonicalizeOnSet, and call \a
-  /// sys::path::WorkingDirectoryState::setCurrentWorkingDirectory().
-  ///
-  /// Else, errors, calls \a sys::fs::set_current_path(), or initializes
-  /// virtual state, depending on \a Settings::InitOnSet.
   Error setCurrentWorkingDirectory(const Twine &Path);
 
-  /// Check if there is virtual state.
-  bool hasVirtualState() const { return bool(CWD); }
+  /// Get the current working directory.
+  Error getCurrentWorkingDirectory(SmallVectorImpl<char> &Path) const;
+  Expected<std::string> getCurrentWorkingDirectory() const;
 
-  sys::path::WorkingDirectoryState &getVirtualState() { return *CWD; }
-  const sys::path::WorkingDirectoryState &getVirtualState() const {
-    return *CWD;
+  /// Access the virtual WD, if any.
+  const WorkingDirectoryState *getVirtualWD() const {
+    return M == Live ? nullptr : &VirtualWD;
   }
 
-  /// Drop the virtual state.
-  void dropVirtualState() { CWD = None; }
-
-  /// Initialize empty working directories using \p PathStyle. Errors on
-  /// relative paths.
-  void initializeVirtualState(
-      sys::path::Style PathStyle = sys::path::Style::native) {
-    CWD.emplace(PathStyle);
+  /// Move the virtual WD, if any, into \p WD.
+  void moveVirtualWDInto(WorkingDirectoryState &WD) {
+    WD = M == Live ? WorkingDirectoryState() : std::move(VirtualWD);
   }
 
-  /// Initialize working directories from live snapshot of filesystem. The \a
-  /// sys::path::Style is always sys::path::Style::native.
-  Error initializeVirtualStateFromSnapshot();
+  /// Construct a hybrid working directory. Uses \p VirtualWD if provided.
+  static VirtualWorkingDirectory
+  createHybrid(WorkingDirectoryState VirtualWD = {}) {
+    assert(VirtualWD.getPathStyle() == Style::native &&
+           "Hybrid mode requires Style::native");
+    return VirtualWorkingDirectory(Hybrid, std::move(VirtualWD));
+  }
 
-  VirtualWorkingDirectory() = default;
-  explicit VirtualWorkingDirectory(Settings S) : S(S) {}
-  explicit VirtualWorkingDirectory(const sys::path::WorkingDirectoryState &CWD,
-                                   Settings S = Settings::getVirtual())
-      : S(S), CWD(std::move(CWD)) {}
-  explicit VirtualWorkingDirectory(sys::path::WorkingDirectoryState &&CWD,
-                                   Settings S = Settings::getVirtual())
-      : S(S), CWD(std::move(CWD)) {}
+  /// Construct a live working directory.
+  static VirtualWorkingDirectory createLive() {
+    return VirtualWorkingDirectory(Live, Style::native);
+  }
+
+  /// Construct a virtual working directory that's a snapshot of the working
+  /// directory state on the live filesystem. Errors only if \a
+  /// sys::fs::current_paths().
+  static Expected<VirtualWorkingDirectory> createVirtualSnapshot();
+
+  /// Construct a virtual working directory.
+  explicit VirtualWorkingDirectory(Style PathStyle = Style::native)
+      : VirtualWorkingDirectory(Virtual, PathStyle) {}
+
+  /// Construct a virtual working directory with existing state.
+  explicit VirtualWorkingDirectory(WorkingDirectoryState VirtualWD)
+      : VirtualWorkingDirectory(Virtual, std::move(VirtualWD)) {}
 
 private:
-  Settings S = Settings::getVirtual();
-  Optional<sys::path::WorkingDirectoryState> CWD;
+  explicit VirtualWorkingDirectory(Mode M, WorkingDirectoryState VirtualWD)
+      : M(M), VirtualWD(std::move(VirtualWD)) {}
+
+  explicit VirtualWorkingDirectory(Mode M, Style PathStyle = Style::native)
+      : M(M), VirtualWD(PathStyle) {}
+
+  Mode M;
+  sys::path::WorkingDirectoryState VirtualWD;
 };
 
 } // end namespace vfs

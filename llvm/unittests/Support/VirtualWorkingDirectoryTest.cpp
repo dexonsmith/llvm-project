@@ -21,8 +21,7 @@ namespace {
 TEST(VirtualWorkingDirectoryTest, construct) {
   {
     VirtualWorkingDirectory VWD;
-    EXPECT_EQ(VWD.getSettings(),
-              VirtualWorkingDirectory::Settings::getVirtual());
+    EXPECT_EQ(VWD.getSettings(), VirtualWorkingDirectory::Settings::getDefault());
     EXPECT_EQ(VirtualWorkingDirectory::CWD_Raw,
               VWD.getSettings().CanonicalizeOnSet);
     EXPECT_FALSE(VWD.hasVirtualState());
@@ -104,7 +103,7 @@ TEST(VirtualWorkingDirectoryTest, setCurrentWorkingDirectory) {
 
   {
     VirtualWorkingDirectory VWD;
-    VWD.getSettings() = VirtualWorkingDirectory::Settings::getVirtual();
+    VWD.initializeVirtualState();
 
     EXPECT_THAT_ERROR(VWD.setCurrentWorkingDirectory("//some/root"),
                       Succeeded());
@@ -116,7 +115,6 @@ TEST(VirtualWorkingDirectoryTest, setCurrentWorkingDirectory) {
 
   {
     VirtualWorkingDirectory VWD;
-    VWD.getSettings() = VirtualWorkingDirectory::Settings::getInitLive();
 
     EXPECT_THAT_ERROR(VWD.setCurrentWorkingDirectory("."), Succeeded());
 
