@@ -934,31 +934,33 @@ Expected<SymbolRef> SymbolRef::get(Expected<ObjectFormatNodeRef> Ref) {
   if (Specific->getNumReferences() != 1 && Specific->getNumReferences() != 2)
     return createStringError(inconvertibleErrorCode(), "corrupt symbol");
 
-  // Check that the linkage is valid.
-  if (Specific->getData().empty())
+  // Check that the attributes are valid.
+  data::SymbolAttributes Attrs;
+  StringRef Remaining = Specific->getData();
+  if (errorToBool(data::SymbolAttributes::consume(Remaining).moveInto(Attrs)))
     return createStringError(inconvertibleErrorCode(),
-                             "corrupt symbol linkage");
+                             "corrupt symbol attributes");
 
-  uint64_t Offset = 0;
-  if (Specific->getData().size() > 1) {
-    StringRef Remaining = Specific->getData().drop_front();
-    Error E = encoding::consumeVBR8(Remaining, Offset);
-    if (E || !Remaining.empty()) {
-      consumeError(std::move(E));
+  if (!Remaining.empty()) {
+    // FIXME: Try to remove the symbol template flag entirely.
+    if (Remaining.front() != 1 && Remaining.front() != 0)
       return createStringError(inconvertibleErrorCode(),
-                               "corrupt symbol offset");
-    }
+                               "corrupt symbol template flag");
+    Remaining = Remaining.drop_front();
   }
 
-  // Anonymous symbols cannot be exported or merged by name.
+  uint64_t Offset = 0;
+  if (!Remaining.empty()) {
+    // Parse the offset.
+    if (errorToBool(encoding::consumeVBR8(Remaining, Offset)) ||
+        !Remaining.empty())
+      return createStringError(inconvertibleErrorCode(),
+                               "corrupt symbol offset");
+  }
+
+  // Anonymous symbols must be local.
   SymbolRef Symbol(*Specific, Offset);
-  if ((uint8_t)Symbol.getDeadStrip() > (uint8_t)DS_Max ||
-      (uint8_t)Symbol.getScope() > (uint8_t)S_Max ||
-      (uint8_t)Symbol.getMerge() > (uint8_t)M_Max)
-    return createStringError(inconvertibleErrorCode(),
-                             "corrupt symbol linkage");
-  if ((!Symbol.hasName()) &&
-      (Symbol.getScope() != S_Local || (Symbol.getMerge() & M_ByName)))
+  if (!Symbol.hasName() && !Attrs.isLocal())
     return createStringError(inconvertibleErrorCode(),
                              "corrupt anonymous symbol");
 
@@ -966,7 +968,8 @@ Expected<SymbolRef> SymbolRef::get(Expected<ObjectFormatNodeRef> Ref) {
 }
 
 bool SymbolRef::isSymbolTemplate() const {
-  return (unsigned char)getData()[0] & 0x1U;
+  return getData().size() >= data::SymbolAttributes::EncodedSize + 1 &&
+         getData().drop_front(data::SymbolAttributes::EncodedSize)[0];
 }
 
 cl::opt<bool> UseAutoHideDuringIngestion(
@@ -1044,36 +1047,19 @@ static bool shouldDeadStrip(const jitlink::Symbol &S) {
          shouldDeadStripInSection(S.getBlock().getSection().getName());
 }
 
-SymbolRef::Flags SymbolRef::getFlags(const jitlink::Symbol &S) {
-  Flags F;
-  switch (S.getScope()) {
-  case jitlink::Scope::Default:
-    F.Scope = S_Global;
-    break;
-  case jitlink::Scope::Hidden:
-    F.Scope = S_Hidden;
-    break;
-  case jitlink::Scope::Local:
-    F.Scope = S_Local;
-    break;
-  };
+data::SymbolAttributes SymbolRef::getAttributes(const jitlink::Symbol &S) {
+  auto Attrs = data::SymbolAttributes::get(S);
 
-  bool IsAutoHide = UseAutoHideDuringIngestion && S.isAutoHide();
+  // Check for command-line argument that force "S" to be kept alive.
+  if (Attrs.getKeepAlive() != data::KeepAlive::Always && shouldKeepAlive(S))
+    Attrs.setKeepAlive(data::KeepAlive::Always);
 
-  // FIXME: Can we detect M_ByContent in more cases?
-  F.Merge = SymbolRef::MergeKind(
-      (S.getLinkage() == jitlink::Linkage::Strong ? M_Never : M_ByName) |
-      (IsAutoHide ? M_ByContent : M_Never));
+  // FIXME: Stop using UseDeadStripCompileForLocals, and instead set
+  // KeepAlive::Referenced only when it's safe.
+  if (UseDeadStripCompileForLocals && Attrs.isLocal() && !Attrs.isUsed())
+    Attrs.setKeepAlive(data::KeepAlive::Referenced);
 
-  // FIXME: Can we detect DS_CompileUnit in more cases?
-  F.DeadStrip = (S.isLive() || shouldKeepAlive(S))
-                    ? DS_Never
-                    : (IsAutoHide || (UseDeadStripCompileForLocals &&
-                                      S.getScope() == jitlink::Scope::Local))
-                          ? DS_CompileUnit
-                          : DS_LinkUnit;
-
-  return F;
+  return Attrs;
 }
 
 Expected<SymbolRef> SymbolRef::create(
@@ -1095,15 +1081,16 @@ Expected<SymbolRef> SymbolRef::create(
     Name = *ExpectedName;
   }
 
-  return create(Schema, Name, *Definition, S.getOffset(), getFlags(S));
+  return create(Schema, Name, *Definition, S.getOffset(), getAttributes(S));
 }
 
 Expected<SymbolRef> SymbolRef::create(const ObjectFileSchema &Schema,
                                       Optional<NameRef> SymbolName,
                                       SymbolDefinitionRef Definition,
-                                      uint64_t Offset, Flags F) {
-  // Anonymous symbols cannot be exported or merged by name.
-  if (!SymbolName && (F.Scope != S_Local || (F.Merge & M_ByName)))
+                                      uint64_t Offset,
+                                      data::SymbolAttributes Attrs) {
+  // Anonymous symbols cannot be exported.
+  if (!SymbolName && !Attrs.isLocal())
     return createStringError(inconvertibleErrorCode(),
                              "invalid anonymous symbol");
 
@@ -1111,16 +1098,15 @@ Expected<SymbolRef> SymbolRef::create(const ObjectFileSchema &Schema,
   if (!B)
     return B.takeError();
 
+  // FIXME: Refactor format not to require storing a symbol template flag.
   bool IsSymbolTemplate = false;
   if (Definition.getKind() == SymbolDefinitionRef::Block)
     IsSymbolTemplate =
         cantFail(BlockRef::get(Definition)).hasAbstractBackedge();
 
-  static_assert(((uint8_t)DS_Max >> 2) == 0, "Not enough bits for dead-strip");
-  static_assert(((uint8_t)S_Max >> 2) == 0, "Not enough bits for scope");
-  static_assert(((uint8_t)M_Max >> 2) == 0, "Not enough bits for merge");
-  B->Data.push_back((uint8_t)F.DeadStrip << 6 | (uint8_t)F.Scope << 4 |
-                    (uint8_t)F.Merge << 2 | (uint8_t)IsSymbolTemplate);
+  Attrs.encode(B->Data);
+  if (IsSymbolTemplate || Offset)
+    B->Data.push_back((uint8_t)IsSymbolTemplate);
   if (Offset)
     encoding::writeVBR8(Offset, B->Data);
 
@@ -1262,7 +1248,10 @@ Expected<SymbolTableRef> SymbolTableRef::create(const ObjectFileSchema &Schema,
                      [&Names, &Symbols](uint32_t LHS, uint32_t RHS) {
                        if (int Diff = Names[LHS].compare(Names[RHS]))
                          return Diff < 0;
-                       return Symbols[LHS].getFlags() < Symbols[RHS].getFlags();
+
+                       // Order is deterministic but not meaningful.
+                       return Symbols[LHS].getAttributes() <
+                              Symbols[RHS].getAttributes();
                      });
 
     // Spot check that anonymous symbols are first.
@@ -1540,26 +1529,26 @@ Error CompileUnitBuilder::createSymbol(const jitlink::Symbol &S) {
       *DebugOS << "anonymous symbol\n";
   }
 
-  SymbolRef::Flags F = SymbolRef::getFlags(S);
+  data::SymbolAttributes Attrs = SymbolRef::getAttributes(S);
 
   Expected<SymbolRef> Symbol =
-      SymbolRef::create(Schema, Name, *Definition, S.getOffset(), F);
+      SymbolRef::create(Schema, Name, *Definition, S.getOffset(), Attrs);
   if (!Symbol)
     return Symbol.takeError();
 
   // Check if the symbol should be indexed at the top level.
-  switch (Symbol->getDeadStrip()) {
-  case SymbolRef::DS_Never:
+  switch (Symbol->getKeepAlive()) {
+  case data::KeepAlive::Always:
     // All KeepAlive symbols end up here. That'll include attribute((used)).
     DeadStripNeverSymbols.push_back(*Symbol);
     break;
-  case SymbolRef::DS_LinkUnit:
+  case data::KeepAlive::Default:
     // All symbols that the compiler was not allowed to dead-strip end up here.
     // For C++, that typically excludes inlines, templates, and local symbols,
     // which end up in the next case.
     DeadStripLinkSymbols.push_back(*Symbol);
     break;
-  case SymbolRef::DS_CompileUnit:
+  case data::KeepAlive::Referenced:
     // Collect dead-strippable symbols that are referenced indirectly (i.e., by
     // name) in IndirectDeadStripCompileSymbols.
     //
@@ -1680,7 +1669,7 @@ CompileUnitBuilder::getOrCreateTarget(const jitlink::Symbol &S,
 
     // FIXME: Add a test confirming that this is done if and only if the
     // deadstripping is DS_CompileUnit.
-    if (Info.Symbol->getDeadStrip() == SymbolRef::DS_CompileUnit)
+    if (Info.Symbol->getKeepAlive() == data::KeepAlive::Referenced)
       IndirectDeadStripCompileSymbols.push_back(*Info.Symbol);
 
     Expected<Optional<NameRef>> Name = Info.Symbol->getName();

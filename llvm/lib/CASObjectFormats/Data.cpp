@@ -29,6 +29,171 @@ SectionProtectionFlags data::encodeProtectionFlags(jitlink::MemProt Perms) {
       ((Perms & jitlink::MemProt::Exec) != jitlink::MemProt::None ? Exec : 0));
 }
 
+bool SymbolAttributes::isValid() const {
+  // Check conflicting flags for Exported and Undefined.
+  if (Flags & (isExported() ? SymbolFlags::IllegalFlagsIfExported
+                            : SymbolFlags::ExportedFlags))
+    return false;
+  if (Flags & (isUndefined() ? SymbolFlags::IllegalFlagsIfUndefined
+                             : SymbolFlags::UndefinedFlags))
+    return false;
+
+  // The extra bit for GlobalUnnamedAddr should only be set with UnnamedAddr.
+  if (!isUnnamedAddress() && (Flags & SymbolFlags::UnnamedAddressFlags))
+    return false;
+
+  // Visibility flags are mutually exclusive.
+  if (Flags & SymbolFlags::VisibilityFlags) {
+    assert((isHidden() || isProtected()) &&
+           "Expected to enumerate visibility flags...");
+    if (isHidden() && isProtected())
+      return false;
+  }
+
+  // Check the bit for Autohide isn't used in isolation
+  if (!isAutohide() && (Flags & SymbolFlags::AutohideFlag))
+    return false;
+
+  return true;
+}
+
+constexpr size_t SymbolAttributes::EncodedSize;
+
+SymbolAttributes SymbolAttributes::get(const jitlink::Symbol &Symbol) {
+  Optional<data::SymbolAttributes> Attrs;
+  if (Symbol.isExternal()) {
+    Attrs = Symbol.getLinkage() == jitlink::Linkage::Weak
+                ? data::SymbolAttributes::getUndefinedOrNull()
+                : data::SymbolAttributes::getUndefined();
+  } else {
+    Optional<data::Scope> S;
+    switch (Symbol.getScope()) {
+    case jitlink::Scope::Default:
+      S = data::Scope::Global;
+      break;
+    case jitlink::Scope::Hidden:
+      S = data::Scope::Hidden;
+      break;
+    case jitlink::Scope::Local:
+      S = data::Scope::Local;
+      break;
+    }
+    Attrs.emplace(*S);
+
+    // FIXME: Investigate whether it's valid for LinkGraph::addCommonSymbol()
+    // to be called with jitlink::Scope::Local; more likely, this
+    // "isExported()" check can be skipped and the test in
+    // NestedV1SchemaTest::BlockSymbols should be changed instead (and maybe an
+    // assertion added to LinkGraph?).
+    if (Attrs->isExported())
+      if (Symbol.getLinkage() == jitlink::Linkage::Weak)
+        Attrs->setLinkage(Linkage::Weak);
+  }
+
+  if (Symbol.isLive())
+    Attrs->setKeepAlive(KeepAlive::Always);
+
+  // Fine-tune various settings for Mach-O's ".weak_def_can_be_hidden".
+  if (Symbol.isAutoHide())
+    Attrs->setAutoHide();
+
+  return *Attrs;
+}
+
+void SymbolAttributes::print(raw_ostream &OS) const {
+  OS << getScope();
+  if (isUndefined())
+    return;
+
+  auto printAttr = [&](StringRef Prefix, auto V) {
+    if (V != decltype(V)::Default)
+      OS << '+' << Prefix << V;
+  };
+  printAttr("", getHiding());
+  printAttr("", getLinkage());
+  printAttr("keep=", getKeepAlive());
+  printAttr("noaddr=", getUnnamedAddress());
+}
+
+LLVM_DUMP_METHOD void SymbolAttributes::dump() const { print(dbgs()); }
+
+void SymbolAttributes::encode(SmallVectorImpl<char> &Data) const {
+  unsigned Data =
+      unsigned(SA.getKeepAlive()) << 0 | unsigned(SA.getUnnamedAddress()) << 2 |
+      unsigned(SA.getScope()) << 4 | unsigned(SA.getLinkage()) << 7 |
+      unsigned(SA.getHiding()) << 8;
+  SymbolAttributesEncodingT Encoded = Data;
+  assert(Encoded == Data && "Ran out of bits");
+
+  raw_svector_ostream OS(Data);
+  support::endian::Writer EW(OS, support::endianness::little);
+  EW.write(encodeSymbolAttributes(*this));
+}
+
+static Expected<SymbolAttributes>
+decodeSymbolAttributes(SymbolAttributesEncodedT Data) {
+  if (Data == SA_UndefinedValue)
+    return SymbolAttributes::getUndefined();
+  if (Data == SA_UndefinedOrNullValue)
+    return SymbolAttributes::getUndefinedOrNull();
+
+  auto makeError = [Data]() {
+    return createStringError(inconvertibleErrorCode(),
+                             "invalid symbol attributes '" +
+                                 Twine((unsigned long long)Data) + "'");
+  };
+
+  // Check if bits reserved for undefined attributes are corrupt.
+  if ((Data & SA_IsUndefinedBits) == SA_IsUndefinedBits)
+    return makeError();
+
+  auto extract = [Data](SymbolAttributesEncodedT Mask, int Start,
+                        unsigned Max) {
+    unsigned Extracted = (Data & Mask) >> Start;
+
+    // Check logic for masks and shifting. This should pass even if there is
+    // data corruption.
+    assert(Extracted < Max && "Logic error in encoding");
+    return Extracted;
+  };
+#define SA_EXTRACT_MACRO(T, M) T(extract(SA_##T##Mask, SA_##T##Start, M))
+  auto K = SA_EXTRACT_MACRO(KeepAlive, 4);
+  auto U = SA_EXTRACT_MACRO(UnnamedAddress, 4);
+  auto S = SA_EXTRACT_MACRO(Scope, 4);
+  auto L = SA_EXTRACT_MACRO(Linkage, 2);
+  auto H = SA_EXTRACT_MACRO(Hiding, 2);
+#undef SA_EXTRACT_MACRO
+
+  // Check for corrupt data before constructing.
+  if (U > UnnamedAddress::Max || K > KeepAlive::Max)
+    return makeError();
+  if (S == Scope::Local && !(L == Linkage::Default && H == Hiding::Default))
+    return makeError();
+
+  return SymbolAttributes(S, H, L, K, U);
+}
+
+Expected<SymbolAttributes> SymbolAttributes::decode(StringRef Data) {
+  if (Data.size() != EncodedSize)
+    return createStringError(inconvertibleErrorCode(),
+                             "invalid symbol attributes");
+  using namespace llvm::support;
+  auto Bits =
+      endian::read<SymbolAttributesEncodedT, endianness::little, unaligned>(
+          Data.begin());
+  return decodeSymbolAttributes(Bits);
+}
+
+Expected<SymbolAttributes> SymbolAttributes::consume(StringRef &Data) {
+  if (Data.size() < EncodedSize)
+    return createStringError(inconvertibleErrorCode(),
+                             "invalid symbol attributes");
+  Expected<SymbolAttributes> Decoded = decode(Data.take_front(EncodedSize));
+  if (Decoded)
+    Data = Data.drop_front(EncodedSize);
+  return Decoded;
+}
+
 void FixupList::encode(ArrayRef<Fixup> Fixups, SmallVectorImpl<char> &Data) {
   // FIXME: Kinds should be numbered in a stable way, not just rely on
   // Edge::Kind.
@@ -249,3 +414,54 @@ void TargetInfoList::iterator::decode(bool IsInit) {
   TI->Addend = Addend;
   TI->Index = IndexAndHasAddend >> 1;
 }
+
+#define CASE_SA_PRINT_ENUM(V, S)                                               \
+  V:                                                                           \
+  OS << S;                                                                     \
+  break
+raw_ostream &data::operator<<(raw_ostream &OS, const Scope &S) {
+  switch (S) {
+  case CASE_SA_PRINT_ENUM(Scope::Undefined, "undef");
+  case CASE_SA_PRINT_ENUM(Scope::UndefinedOrNull, "undef_or_null");
+  case CASE_SA_PRINT_ENUM(Scope::Local, "local");
+  case CASE_SA_PRINT_ENUM(Scope::Global, "global");
+  case CASE_SA_PRINT_ENUM(Scope::Protected, "protected");
+  case CASE_SA_PRINT_ENUM(Scope::Hidden, "hidden");
+  }
+  return OS;
+}
+
+raw_ostream &data::operator<<(raw_ostream &OS, const Hiding &H) {
+  switch (H) {
+  case CASE_SA_PRINT_ENUM(Hiding::Default, "default");
+  case CASE_SA_PRINT_ENUM(Hiding::Hideable, "hideable");
+  }
+  return OS;
+}
+
+raw_ostream &data::operator<<(raw_ostream &OS, const Linkage &L) {
+  switch (L) {
+  case CASE_SA_PRINT_ENUM(Linkage::Default, "default");
+  case CASE_SA_PRINT_ENUM(Linkage::Weak, "weak");
+  }
+  return OS;
+}
+
+raw_ostream &data::operator<<(raw_ostream &OS, const KeepAlive &K) {
+  switch (K) {
+  case CASE_SA_PRINT_ENUM(KeepAlive::Default, "none");
+  case CASE_SA_PRINT_ENUM(KeepAlive::Referenced, "referenced");
+  case CASE_SA_PRINT_ENUM(KeepAlive::Always, "always");
+  }
+  return OS;
+}
+
+raw_ostream &data::operator<<(raw_ostream &OS, const UnnamedAddress &U) {
+  switch (U) {
+  case CASE_SA_PRINT_ENUM(UnnamedAddress::Default, "default");
+  case CASE_SA_PRINT_ENUM(UnnamedAddress::Local, "local");
+  case CASE_SA_PRINT_ENUM(UnnamedAddress::Global, "global");
+  }
+  return OS;
+}
+#undef CASE_SA_PRINT_ENUM
