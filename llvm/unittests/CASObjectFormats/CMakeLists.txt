@@ -12,6 +12,7 @@ add_llvm_unittest(CASObjectFormatsTests
   FlatV1SchemaTest.cpp
   NestedV1SchemaTest.cpp
   NestedV1TargetListTest.cpp
+  SymbolAttributesTest.cpp
   TargetInfoListTest.cpp
   )
 
