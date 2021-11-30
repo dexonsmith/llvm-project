@@ -187,40 +187,39 @@ TEST(NestedV1SchemaTest, SymbolFlags) {
       G.addDefinedSymbol(Block, 0, "symbol5", 0, jitlink::Linkage::Weak,
                          jitlink::Scope::Default, false, false);
 
-  SymbolRef::Flags StrongDefaultDeadFlags =
-      SymbolRef::getFlags(StrongDefaultDead);
-  SymbolRef::Flags StrongDefaultLiveFlags =
-      SymbolRef::getFlags(StrongDefaultLive);
-  SymbolRef::Flags StrongHiddenDeadFlags =
-      SymbolRef::getFlags(StrongHiddenDead);
-  SymbolRef::Flags StrongLocalDeadFlags = SymbolRef::getFlags(StrongLocalDead);
-  SymbolRef::Flags WeakDefaultDeadFlags = SymbolRef::getFlags(WeakDefaultDead);
+  auto StrongDefaultDeadFlags = SymbolRef::getAttributes(StrongDefaultDead);
+  auto StrongDefaultLiveFlags = SymbolRef::getAttributes(StrongDefaultLive);
+  auto StrongHiddenDeadFlags = SymbolRef::getAttributes(StrongHiddenDead);
+  auto StrongLocalDeadFlags = SymbolRef::getAttributes(StrongLocalDead);
+  auto WeakDefaultDeadFlags = SymbolRef::getAttributes(WeakDefaultDead);
 
-  for (SymbolRef::Flags F : {
+  for (auto F : {
            StrongDefaultDeadFlags,
            StrongDefaultLiveFlags,
            StrongHiddenDeadFlags,
            StrongLocalDeadFlags,
-       })
-    EXPECT_EQ(SymbolRef::M_Never, F.Merge);
-  for (SymbolRef::Flags F : {
+       }) {
+    EXPECT_FALSE(F.isWeak());
+    EXPECT_EQ(data::UnnamedAddress::Default, F.getUnnamedAddress());
+  }
+  for (auto F : {
            StrongDefaultDeadFlags,
            StrongHiddenDeadFlags,
            WeakDefaultDeadFlags,
        })
-    EXPECT_EQ(SymbolRef::DS_LinkUnit, F.DeadStrip);
-  for (SymbolRef::Flags F : {
+    EXPECT_EQ(data::KeepAlive::Default, F.getKeepAlive());
+  for (auto F : {
            StrongDefaultDeadFlags,
            StrongDefaultLiveFlags,
            WeakDefaultDeadFlags,
        })
-    EXPECT_EQ(SymbolRef::S_Global, F.Scope);
+    EXPECT_EQ(data::Scope::Global, F.getScope());
 
-  EXPECT_EQ(SymbolRef::DS_Never, StrongDefaultLiveFlags.DeadStrip);
-  EXPECT_EQ(SymbolRef::DS_CompileUnit, StrongLocalDeadFlags.DeadStrip);
-  EXPECT_EQ(SymbolRef::S_Hidden, StrongHiddenDeadFlags.Scope);
-  EXPECT_EQ(SymbolRef::S_Local, StrongLocalDeadFlags.Scope);
-  EXPECT_EQ(SymbolRef::M_ByName, WeakDefaultDeadFlags.Merge);
+  EXPECT_EQ(data::KeepAlive::Always, StrongDefaultLiveFlags.getKeepAlive());
+  EXPECT_EQ(data::KeepAlive::Referenced, StrongLocalDeadFlags.getKeepAlive());
+  EXPECT_EQ(data::Scope::Hidden, StrongHiddenDeadFlags.getScope());
+  EXPECT_TRUE(StrongLocalDeadFlags.isLocal());
+  EXPECT_TRUE(WeakDefaultDeadFlags.isWeak());
 }
 
 TEST(NestedV1SchemaTest, BlockSymbols) {
@@ -263,7 +262,7 @@ TEST(NestedV1SchemaTest, BlockSymbols) {
     ASSERT_TRUE(Symbol);
 
     // Check the flags match.
-    EXPECT_EQ(SymbolRef::getFlags(*S), Symbol->getFlags());
+    EXPECT_EQ(SymbolRef::getAttributes(*S), Symbol->getAttributes());
 
     // Get out a block independently and check that it's correct.
     Optional<BlockRef> Block = expectedToOptional(
@@ -282,8 +281,8 @@ TEST(NestedV1SchemaTest, SymbolTable) {
       G.createSection("section", jitlink::MemProt::Exec);
   jitlink::Block &Block = G.createContentBlock(Section, BlockContent, 0, 16, 0);
   jitlink::Symbol *Symbols[] = {
-      &G.addAnonymousSymbol(Block, 0, 0, false, /*IsLive*/ false),
       &G.addAnonymousSymbol(Block, 0, 0, false, /*IsLive*/ true),
+      &G.addAnonymousSymbol(Block, 0, 0, false, /*IsLive*/ false),
       &G.addCommonSymbol("symbol1", jitlink::Scope::Default, Section, 0, 16, 16,
                          true),
       &G.addCommonSymbol("symbol2", jitlink::Scope::Default, Section, 0, 16, 16,
@@ -306,12 +305,12 @@ TEST(NestedV1SchemaTest, SymbolTable) {
   }
 
   SmallVector<SymbolRef> TableRefs = {
-      AllRefs[0], // anonymous, dead-strip=link
+      AllRefs[0], // anonymous, keep-alive=always
       AllRefs[3], // symbol2
-      AllRefs[1], // anonymous, dead-strip=never
-      AllRefs[0], // anonymous, dead-strip=link
+      AllRefs[1], // anonymous, keep-alive=default
+      AllRefs[0], // anonymous, keep-alive=always
       AllRefs[2], // symbol1
-      AllRefs[1], // anonymous, dead-strip=never
+      AllRefs[1], // anonymous, keep-alive=default
   };
 
   // This is the API being tested.
@@ -320,9 +319,14 @@ TEST(NestedV1SchemaTest, SymbolTable) {
   ASSERT_TRUE(Table);
 
   // Check the order.
+  //
+  // FIXME: Ingestion should not always sort the order; by default, it should
+  // store some "shuffle" at the top-level that restores the original order for
+  // iteration / creating a LinkGraph, and only canonicalize order sometimes.
+  // If/when that's implemented, we should update this.
   SmallVector<SymbolRef> ExpectedOrder = {
-      AllRefs[1], // anonymous, dead-strip=never
-      AllRefs[0], // anonymous, dead-strip=link
+      AllRefs[1], // anonymous, keep-alive=default
+      AllRefs[0], // anonymous, keep-alive=always
       AllRefs[2], // symbol1
       AllRefs[3], // symbol2
   };
@@ -694,7 +698,7 @@ TEST(NestedV1SchemaTest, ModInitFuncSection) {
     Optional<SymbolRef> Symbol = expectedToOptional(
         SymbolRef::create(Schema, *S, createSymbolDefinition));
     ASSERT_TRUE(Symbol);
-    EXPECT_EQ(SymbolRef::getFlags(*S).DeadStrip, SymbolRef::DS_Never);
+    EXPECT_TRUE(SymbolRef::getAttributes(*S).isUsed());
   }
 }
 

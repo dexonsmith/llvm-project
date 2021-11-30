@@ -570,60 +570,7 @@ class SymbolRef : public SpecificRef<SymbolRef> {
 public:
   static constexpr StringLiteral KindString = "cas.o:symbol";
 
-  /// Semantics for dead-stripping.
-  enum DeadStripKind {
-    DS_Never,       // Symbols with "used" attribute.
-    DS_CompileUnit, // Other "linkonce", "internal", and "private" symbols.
-    DS_LinkUnit,    // Other symbols.
-    DS_Max = DS_LinkUnit,
-  };
-
-  /// Semantics for exporting.
-  enum ScopeKind {
-    S_Local,  // Symbols with "internal" or "private".
-    S_Hidden, // Symbols with "hidden".
-    S_Global, // Other (defined) symbols.
-    S_Max = S_Global,
-  };
-
-  /// Semantics for sharing blocks or merging with other symbols.
-  enum MergeKind {
-    M_Never = 0,     // Other symbols (see below).
-    M_ByName = 1,    // "weak" or "linkonce" symbols.
-    M_ByContent = 2, // Symbols with "unnamed_addr" attribute.
-    M_ByNameOrContent = M_ByName | M_ByContent,
-    M_Max = M_ByNameOrContent,
-  };
-
-  /// The various axes of linkage.
-  struct Flags {
-    DeadStripKind DeadStrip = DS_Never;
-    ScopeKind Scope = S_Local;
-    MergeKind Merge = M_Never;
-
-    bool operator==(const Flags &RHS) const {
-      return DeadStrip == RHS.DeadStrip && Scope == RHS.Scope &&
-             Merge == RHS.Merge;
-    }
-    bool operator!=(const Flags &RHS) const { return !operator==(RHS); }
-    bool operator<(const Flags &RHS) const {
-      if (DeadStrip < RHS.DeadStrip)
-        return true;
-      if (DeadStrip > RHS.DeadStrip)
-        return false;
-      if (Scope < RHS.Scope)
-        return true;
-      if (Scope > RHS.Scope)
-        return false;
-      return Merge < RHS.Merge;
-    }
-
-    Flags() = default;
-    Flags(DeadStripKind DeadStrip, ScopeKind Scope, MergeKind Merge)
-        : DeadStrip(DeadStrip), Scope(Scope), Merge(Merge) {}
-  };
-
-  static Flags getFlags(const jitlink::Symbol &S);
+  static data::SymbolAttributes getAttributes(const jitlink::Symbol &S);
 
   /// Anonymous symbols don't have names.
   bool hasName() const { return getNumReferences() > 1; }
@@ -634,24 +581,21 @@ public:
 
   uint64_t getOffset() const { return Offset; }
 
-  Flags getFlags() const {
-    return Flags(getDeadStrip(), getScope(), getMerge());
+  data::SymbolAttributes getAttributes() const {
+    return cantFail(data::SymbolAttributes::decode(
+        getData().take_front(data::SymbolAttributes::EncodedSize)));
+  }
+  data::Scope getScope() const { return getAttributes().getScope(); }
+  data::Hiding getHiding() const { return getAttributes().getHiding(); }
+  data::Linkage getLinkage() const { return getAttributes().getLinkage(); }
+  data::KeepAlive getKeepAlive() const {
+    return getAttributes().getKeepAlive();
+  }
+  data::UnnamedAddress getUnnamedAddress() const {
+    return getAttributes().getUnnamedAddress();
   }
 
-  DeadStripKind getDeadStrip() const {
-    return (DeadStripKind)(((unsigned char)getData()[0] >> 6) & 0x3);
-  }
-  ScopeKind getScope() const {
-    return (ScopeKind)(((unsigned char)getData()[0] >> 4) & 0x3);
-  }
-  MergeKind getMerge() const {
-    return (MergeKind)(((unsigned char)getData()[0] >> 2) & 0x3);
-  }
-
-  bool isAutoHide() const {
-    return getDeadStrip() == DS_CompileUnit && getScope() != S_Local &&
-           getMerge() == M_ByNameOrContent;
-  }
+  bool isAutoHide() const { return getAttributes().isAutoHide(); }
 
   cas::CASID getDefinitionID() const { return getReference(0); }
   Optional<cas::CASID> getNameID() const {
@@ -681,7 +625,8 @@ public:
   static Expected<SymbolRef> create(const ObjectFileSchema &Schema,
                                     Optional<NameRef> SymbolName,
                                     SymbolDefinitionRef Definition,
-                                    uint64_t Offset, Flags F);
+                                    uint64_t Offset,
+                                    data::SymbolAttributes Attrs);
 
   static Expected<SymbolRef>
   create(const ObjectFileSchema &Schema, const jitlink::Symbol &S,
