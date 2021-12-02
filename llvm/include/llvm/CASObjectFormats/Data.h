@@ -66,39 +66,149 @@ enum class Scope {
   /// LLVM IR: "external" linkage.
   Undefined,
 
-  /// Undefined / externally defined, or null.
-  ///
-  /// LLVM IR: "extern_weak" linkage.
   UndefinedOrNull,
+
+  /// Convenience for data validation.
+  Max = UndefinedOrNull,
 };
 raw_ostream &operator<<(raw_ostream &OS, const Scope &S);
 
-enum class Hiding {
-  /// Should stay in the symbol table unless dead-stripped.
-  Default,
+enum class SymbolFlags : unsigned char {
+  Default = 0,
 
-  /// Can be removed from the symbol table without changing program semantics.
+  /// Exported. May be referenced by other compile units (and barring other
+  /// flags, other linkage units).
+  ///
+  /// Requires: !Undefined.
+  ///
+  /// LLVM IR: not "internal" or "private".
+  Exported = 1,
+
+  /// Weak linkage: one definition is selected at link time.
+  ///
+  /// LLVM IR: "common", "weak", "weak_odr", "linkonce", and "linkonce_odr".
+  Weak = Exported | 1U << 1,
+
+  /// Exported from the compile unit, but not the linkage unit. Can be
+  /// referenced from other compile units.
+  ///
+  /// The link effectively downgrades to \a Local by not including this in the
+  /// dynamic symbol table.
+  ///
+  /// LLVM IR: "hidden" visibility.
+  Hidden = Exported | 1U << 2,
+
+  /// Exported, but cannot be overridden. Only relevant for ELF.
+  ///
+  /// LLVM IR: "protected" visibility.
+  Protected = Exported | 1U << 3,
+
+  /// "One definition rule". Language guarantee that other exported symbols
+  /// with the same name are semantically equivalent.
+  ///
+  /// LLVM IR: "weak_odr" and "linkonce_odr".
+  ODR = Exported | 1U << 4,
+  WeakODR = Weak | ODR,
+
+  /// Discardable despite being exported, unless also \a Used.
+  ///
+  /// LLVM IR: "linkonce" and "linkonce_odr". "available_externally" also
+  /// matches this, although LLVM always discards it before lowering.
+  Discardable = Exported | 1U << 5,
+  Linkonce = Weak | Discardable,
+  LinkonceODR = Linkonce | Discardable,
+
+  /// Bits that depend on \a Exported.
+  ExportedFlags = Exported | Weak | Hidden | ODR | Discardable,
+
+  /// Address is not taken for comparison locally. If exported, it's possible
+  /// that another compile unit or linkage unit takes its address and compares
+  /// it.
+  ///
+  /// If/when the scope is \a Scope::Local (or becomes so; e.g., after hiding
+  /// from symbol table), this can legally alias a symbol that is known to have
+  /// equivalent content.
+  ///
+  /// LLVM IR: "local_unnamed_addr" and "unnamed_addr".
+  LocalUnnamedAddress = 1U << 6,
+
+  /// Can be removed from the symbol table (downgraded to \a Scope::Local)
+  /// without changing program semantics, even if it cannot be discarded
+  /// due to references.
   ///
   /// LLVM IR: "linkonce_odr" with "unnamed_addr" or when constant with
   /// "local_unnamed_addr".
-  Hideable,
-};
-raw_ostream &operator<<(raw_ostream &OS, const Hiding &H);
+  Autohide = LinkonceODR | LocalUnnamedAddress,
 
-/// How to link together duplicate symbols. Not relevant for \a Scope::Local.
-enum class Linkage {
-  /// A clashing name is a duplicate definition error; or, \a Scope::Local.
+  /// Callable.
   ///
-  /// LLVM IR: "internal", "private", and "external".
-  Default,
+  /// LLVM IR: function, ifuncs, and aliases of functions and ifuncs.
+  Callable = 1U << 7,
 
-  /// Weak linkage: one definition is selected at link time. Definitions
-  /// are guaranteed to be semantically equivalent.
+  /// Undefined / externally defined.
   ///
-  /// LLVM IR: "common", "weak", "weak_odr", "linkonce", and "linkonce_odr".
-  Weak,
+  /// Requires: !Exported.
+  ///
+  /// LLVM IR: declarations ("declare").
+  Undefined = 1U << 8
+
+  /// Undefined / externally defined, or possibly null.
+  ///
+  /// LLVM IR: "extern_weak" linkage.
+  ExternWeak = Undefined | 1U << 9,
+
+  /// Bits that depend on \a Undefined. No other bit is valid if any of these
+  /// is set.
+  UndefinedFlags = Undefined | ExternWeak,
+
+  /// Flag to indicate this is a template in the object format encoding. This
+  /// helps to improve deduplication of EH frame symbols in the nestedv1
+  /// format where symbols currently reference their transitive call graph, by
+  /// using a placeholder edge to the function that gets fixed up later using
+  /// the function's keep-alive edge to the EH frame.
+  ///
+  /// Requires: !Exported.
+  ///
+  /// FIXME: Stop relying on this and remove it.
+  EncodingTemplate = 1U << 10,
+
+  /// Flag to indicate that the definition has an outgoing edge that has
+  /// "inverted" liveness semantics. Such an edge means that instead of the
+  /// source (this symbol) keeping the target alive, the target keeps alive the
+  /// source, and if the target is discarded then this should be too.
+  ///
+  /// This allows metadata content (such an FDR in EH frames, or a slice of
+  /// debug info specific to a function) to be kept alive by the thing it
+  /// describes *without* modifying it.
+  ///
+  /// Requires: !Exported.
+  ///
+  /// TODO: Add an "inverted" liveness property to edges (so this flag is EVER
+  /// true) and stop serializing \a jitlink::Edge::KeepAlive edges in \a
+  /// jitlink::LinkGraph in favour of serializing these. The KeepAlive edges in
+  /// \a jitlink::LinkGraph model this liveness relationship by mutating the
+  /// target. The opposite behaviour would leave the target unchanged. It also
+  /// avoids adding a cycle, allowing \a EncodingTemplate above to be removed.
+  ///
+  /// LLVM IR: does not exist (yet!), but would be useful for precisely
+  /// modelling liveness of ASan global variable descriptors and Swift protocol
+  /// conformances. In LLVM IR, syntax could be "lives_for(...)":
+  /// /code
+  /// @var = global i32 0
+  /// @.var.desc = private {i32*, i32} {i32* @var, i32 7},
+  ///              section "specialsection",
+  ///              lives_for(@var)
+  /// /endcode
+  /// ... where @desc should be kept-alive as long as @var is. In other object
+  /// file formats, @desc would be lowered as-if in "!llvm.used". But in this
+  /// one, its edge to @global would be marked with inverted liveness and the
+  /// symbol would have \a HasInvertedLivenessEdge set.
+  HasInvertedLivenessEdge = 1U << 11,
+
+  LLVM_MARK_AS_BITMASK_ENUM(/*LargestValue=*/HasInvertedLivenessEdge);
 };
-raw_ostream &operator<<(raw_ostream &OS, const Linkage &L);
+LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
+raw_ostream &operator<<(raw_ostream &OS, const SymbolFlags &F);
 
 /// Rules for whether a symbol is discardable.
 enum class KeepAlive {
@@ -107,57 +217,14 @@ enum class KeepAlive {
   /// LLVM IR: most symbols not in "!llvm.used".
   Default,
 
-  /// Discardable if even if exported.
-  ///
-  /// LLVM IR: "linkonce" and "linkonce_odr" unless in "!llvm.used".
-  /// "available_externally" also matches this semantically, but it'll never be
-  /// emitted anyway.
   Referenced,
 
-  /// Always keep alive / never discardable.
-  ///
-  /// LLVM IR: symbols in "!llvm.used".
   Always,
 
   /// Convenience for data validation.
   Max = Always,
 };
 raw_ostream &operator<<(raw_ostream &OS, const KeepAlive &K);
-
-/// Semantic guarantees about the relevance of a symbol's identity, which
-/// affects whether symbols can start aliasing each other (by merging their
-/// blocks).
-///
-/// See: \a llvm::GlobalValue::UnnamedAddr.
-enum class UnnamedAddress {
-  /// No guarantees. Address may be relevant.
-  ///
-  /// LLVM IR: most symbols.
-  Default,
-
-  /// Address is not taken locally. It's possible that another compile unit or
-  /// linkage unit takes its address.
-  ///
-  /// If/when the scope becomes \a Scope::Local (e.g., after hiding from symbol
-  /// table), can become an alias of another symbol that is known to have the
-  /// same content.
-  ///
-  /// LLVM IR: "local_unnamed_addr".
-  Local,
-
-  /// Address is not taken. Either not exported (\a Scope::Local), or there is
-  /// a semantic guarantee that the address is not relevant.
-  ///
-  /// Can become an alias of another symbol that is known to have the same
-  /// content.
-  ///
-  /// LLVM IR: "unnamed_addr".
-  Global,
-
-  /// Convenience for data validation.
-  Max = Global,
-};
-raw_ostream &operator<<(raw_ostream &OS, const UnnamedAddress &U);
 
 /// Symbol attributes.
 ///
@@ -304,8 +371,12 @@ public:
     return OS;
   }
 
-  /// Guarantee the size of the attributes.
-  static constexpr size_t EncodedSize = 1;
+private:
+  using SymbolAttributesEncodedT = uint16_t;
+
+public:
+  /// Guarantee the size of the attributes (for now?).
+  static constexpr size_t EncodedSize = sizeof(SymbolAttributesEncodedT);
   void encode(SmallVectorImpl<char> &Data) const;
   static Expected<SymbolAttributes> consume(StringRef &Data);
   static Expected<SymbolAttributes> decode(StringRef Data);
@@ -361,11 +432,17 @@ private:
     return isExported();
   }
 
-  unsigned S : 3;
-  unsigned H : 1;
-  unsigned L : 1;
-  unsigned K : 2;
-  unsigned U : 2;
+  static constexpr NumScopeBits = 3;
+  static constexpr NumHidingBits = 1;
+  static constexpr NumLinkageBits = 1;
+  static constexpr NumKeepAliveBits = 2;
+  static constexpr NumUnnamedAddressBits = 2;
+
+  unsigned S : NumScopeBits;
+  unsigned H : NumHidingBits;
+  unsigned L : NumLinkageBits;
+  unsigned K : NumKeepAliveBits;
+  unsigned U : NumUnnamedAddressBits;
 };
 
 /// The kind and offset of a fixup (e.g., for a relocation).

@@ -89,72 +89,18 @@ void SymbolAttributes::print(raw_ostream &OS) const {
 
 LLVM_DUMP_METHOD void SymbolAttributes::dump() const { print(dbgs()); }
 
-namespace {
-/// Pack into 1B.
-///
-/// Note the following unused bitspace:
-///
-/// - Scope  == Undefined|UndefinedOrNull => other fields irrelevant.
-/// - Scope  == Local                     => Linkage/Hiding irrelevant.
-/// - Hiding == Hideable                  => Scope is Global/Protected/Hidden.
-/// - UnnamedAddress                      => three cases.
-/// - KeepAlive                           => three cases.
-///
-/// Taking advantage of just a few of those allows this encoding:
-///
-/// "00001100" => Scope=Undefined
-/// "00001101" => Scope=UndefinedOrNull
-/// "hlssuukk" => Scope=Local/Hidden/Global/Protected
-///
-/// Where "uu" / UnnamedAddress of "11" is reserved for undefined symbols.
-enum SymbolAttributesBits : unsigned {
-  // Bit locations.
-  SA_KeepAliveStart = 0,
-  SA_UnnamedAddressStart = 2,
-  SA_ScopeStart = 4,
-  SA_LinkageStart = 6,
-  SA_HidingStart = 7,
-
-  // Masks for fields.
-  SA_KeepAliveMask = 0x3u << SA_KeepAliveStart,
-  SA_UnnamedAddressMask = 0x3u << SA_UnnamedAddressStart,
-  SA_ScopeMask = 0x3u << SA_ScopeStart,
-  SA_LinkageMask = 0x1u << SA_LinkageStart,
-  SA_HidingMask = 0x1u << SA_HidingStart,
-
-  // Special bits for undefined symbols. SA_IsUndefinedBits avoids conflicting
-  // with valid values from the other fields.
-  SA_IsUndefinedBits = SA_UnnamedAddressMask,
-  SA_UndefinedValue = SA_IsUndefinedBits | 0x0,
-  SA_UndefinedOrNullValue = SA_IsUndefinedBits | 0x1,
-};
-using SymbolAttributesEncodedT = uint8_t;
-static_assert(sizeof(SymbolAttributesEncodedT) == SymbolAttributes::EncodedSize,
-              "Ensure EncodedSize is in sync with SymbolAttributesEncodedT.");
-} // end namespace
-
-static SymbolAttributesEncodedT
-encodeSymbolAttributes(const SymbolAttributes &SA) {
-  if (SA.getScope() == Scope::Undefined)
-    return SA_UndefinedValue;
-  if (SA.getScope() == Scope::UndefinedOrNull)
-    return SA_UndefinedOrNullValue;
-  assert(!SA.isUndefined() && "Expected defined symbol");
-
-  unsigned Byte = unsigned(SA.getKeepAlive()) << SA_KeepAliveStart |
-                  unsigned(SA.getUnnamedAddress()) << SA_UnnamedAddressStart |
-                  unsigned(SA.getScope()) << SA_ScopeStart |
-                  unsigned(SA.getLinkage()) << SA_LinkageStart |
-                  unsigned(SA.getHiding()) << SA_HidingStart;
-  assert((Byte & SA_IsUndefinedBits) != SA_IsUndefinedBits &&
-         "Expected to reserve IsUndefined bits");
-  assert(Byte <= UINT8_MAX && "Expected 1B of data");
-  return Byte;
-}
-
 void SymbolAttributes::encode(SmallVectorImpl<char> &Data) const {
-  static_assert(EncodedSize == 1, "Ensure push_back will work.");
-  Data.push_back(encodeSymbolAttributes(*this));
+  unsigned Data = unsigned(SA.getKeepAlive()) << 0 |
+                  unsigned(SA.getUnnamedAddress()) << 2 |
+                  unsigned(SA.getScope()) << 4 |
+                  unsigned(SA.getLinkage()) << 7 |
+                  unsigned(SA.getHiding()) << 8;
+  SymbolAttributesEncodingT Encoded = Data;
+  assert(Encoded == Data && "Ran out of bits");
+
+  raw_svector_ostream OS(Data);
+  support::endian::Writer EW(OS, support::endianness::little);
+  EW.write(encodeSymbolAttributes(*this));
 }
 
 static Expected<SymbolAttributes>
@@ -204,19 +150,19 @@ Expected<SymbolAttributes> SymbolAttributes::decode(StringRef Data) {
   if (Data.size() != EncodedSize)
     return createStringError(inconvertibleErrorCode(),
                              "invalid symbol attributes");
-  return decodeSymbolAttributes(Data[0]);
+  using namespace llvm::support;
+  auto Bits = endian::read<SymbolAttributesEncodedT, endianness::little, unaligned>(Data.begin());
+  return decodeSymbolAttributes(Bits);
 }
 
 Expected<SymbolAttributes> SymbolAttributes::consume(StringRef &Data) {
-  if (Data.empty())
+  if (Data.size() < EncodedSize)
     return createStringError(inconvertibleErrorCode(),
                              "invalid symbol attributes");
-
-  SymbolAttributes SA;
-  if (Error E = decodeSymbolAttributes(Data[0]).moveInto(SA))
-    return E;
-  Data = Data.drop_front();
-  return SA;
+  Expected<SymbolAttributes> Decoded = decode(Data.take_front(EncodedSize));
+  if (Decoded)
+    Data = Data.drop_front(EncodedSize);
+  return Decoded;
 }
 
 void FixupList::encode(ArrayRef<Fixup> Fixups, SmallVectorImpl<char> &Data) {
