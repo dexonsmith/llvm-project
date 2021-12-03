@@ -29,6 +29,34 @@ SectionProtectionFlags data::encodeProtectionFlags(jitlink::MemProt Perms) {
       ((Perms & jitlink::MemProt::Exec) != jitlink::MemProt::None ? Exec : 0));
 }
 
+bool SymbolAttributes::isValid() const {
+  // Check conflicting flags for Exported and Undefined.
+  if (Flags & (isExported() ? SymbolFlags::IllegalFlagsIfExported
+                            : SymbolFlags::ExportedFlags))
+      return false;
+  if (Flags & (isUndefined() ? SymbolFlags::IllegalFlagsIfUndefined
+                              : SymbolFlags::UndefinedFlags))
+    return false;
+
+  // The extra bit for GlobalUnnamedAddr should only be set with UnnamedAddr.
+  if (!isUnnamedAddress() && (Flags & SymbolFlags::UnnamedAddressFlags))
+    return false;
+
+  // Visibility flags are mutually exclusive.
+  if (Flags & SymbolFlags::VisibilityFlags) {
+    assert((isHidden() || isProtected()) &&
+            "Expected to enumerate visibility flags...");
+    if (isHidden() && isProtected())
+      return false;
+  }
+
+  // Check the bit for Autohide isn't used in isolation
+  if (!isAutohide() && (Flags & SymbolFlags::AutohideFlag))
+    return false;
+
+  return true;
+}
+
 constexpr size_t SymbolAttributes::EncodedSize;
 
 SymbolAttributes SymbolAttributes::get(const jitlink::Symbol &Symbol) {
