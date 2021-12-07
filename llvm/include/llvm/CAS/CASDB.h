@@ -51,13 +51,16 @@ enum class ObjectKind {
 /// Storage:
 /// ========
 ///
+/// Namespace
+///   - getName()                  => StringRef (e.g., "llvm.builtin.v1[sha1]")
+///   - printID                    => raw_ostream&
+///   - parseID                    => StringRef => UniqueID
+///   - getHashSize()              => size_t (e.g., 20 or 32)
+///
 /// ObjectHasher
 ///   - Hash objects
-///   - getIdentifier()            => StringRef (e.g., "llvm.builtin.v1[sha1]")
-///   - getUniqueIDSize()          => size_t (e.g., 20)
 ///   - identify{Blob,Node,Tree}   => UniqueID
 ///   - identify{Blob,Node,Tree}   => UniqueIDRef + out-param: SmallVectorImpl<uint8_t>&
-///   - printID                    => raw_ostream
 ///   - Eventually: overloads for identify() with continuation out-param
 ///   - Eventually: overloads for identify() with std::future out-param
 ///
@@ -94,8 +97,7 @@ enum class ObjectKind {
 /// ========
 ///
 /// ActionCache
-///   - Constructed with an ObjectHasher?
-///       - Needs to know size of hash?
+///   - Constructed with a Namespace: needs to know size of hash
 ///   - getIDSize()                                      => size_t
 ///   - put: (StringRef, UniqueIDRef)                    => Error
 ///   - get: (StringRef,
