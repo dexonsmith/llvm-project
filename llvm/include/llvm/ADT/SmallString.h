@@ -73,13 +73,14 @@ public:
     size_t SizeNeeded = this->size();
     for (const StringRef &Ref : Refs)
       SizeNeeded += Ref.size();
-    this->reserve(SizeNeeded);
-    auto CurEnd = this->end();
+    size_t CurrentSize = SizeNeeded;
+    this->resize_for_overwrite(SizeNeeded);
     for (const StringRef &Ref : Refs) {
-      this->uninitialized_copy(Ref.begin(), Ref.end(), CurEnd);
-      CurEnd += Ref.size();
+      this->uninitialized_copy(Ref.begin(), Ref.end(),
+                               this->begin() + CurrentSize);
+      CurrentSize += Ref.size();
     }
-    this->set_size(SizeNeeded);
+    assert(CurrentSize == this->size());
   }
 
   /// @}
