@@ -13,6 +13,7 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CAS/CASID.h"
+#include "llvm/CAS/CASNamespace.h"
 #include "llvm/CAS/TreeEntry.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h" // FIXME: Split out sys::fs::file_status.
@@ -28,399 +29,6 @@ enum class ObjectKind {
   Blob, /// Data, with no references.
   Tree, /// Filesystem-style tree, with named references and entry types.
   Node, /// Abstract hierarchical node, with data and references.
-};
-
-/// IDs:
-///
-/// UniqueID    - Owned ID    (small Hash optimization)
-/// UniqueIDRef - Unowned ID  (wraps ArrayRef<uint8_t>)
-///
-///
-/// For InMemoryView:
-///
-/// InMemoryObject *    - Common base class. Has ID and hash size and subclass data.
-/// InMemoryBlob *      - Get a blob. Adds char* for Data (S32|S16=>size).
-/// InMemoryNode *      - Get a node. Adds char* as Blob; Refs in uint8_t* with flat hash array.
-/// InMemoryTree *      - Get a tree. Adds vtable and uint8_t*. S32=>Num.
-///
-/// BlobRef => InMemoryBlob* != nullptr ??
-/// TreeRef => InMemoryTree* != nullptr ??
-/// NodeRef => InMemoryNode* != nullptr ??
-///
-///
-/// Storage:
-/// ========
-///
-/// Namespace
-///   - getName()                  => StringRef (e.g., "llvm.builtin.v1[sha1]")
-///   - printID                    => raw_ostream&
-///   - parseID                    => StringRef => UniqueID
-///   - getHashSize()              => size_t (e.g., 20 or 32)
-///
-/// ObjectHasher
-///   - Hash objects
-///   - identify{Blob,Node,Tree}   => UniqueID
-///   - identify{Blob,Node,Tree}   => UniqueIDRef + out-param: SmallVectorImpl<uint8_t>&
-///   - Eventually: overloads for identify() with continuation out-param
-///   - Eventually: overloads for identify() with std::future out-param
-///
-/// ObjectStore : ObjectHasher
-///   - Store objects
-///   - get{Blob,Node,Tree}        => Out-param: Capture
-///   - create{Blob,Node,Tree}     => Out-param: UniqueID
-///   - create{Blob,Node,Tree}     => Out-param: UniqueID + Capture
-///   - createBlobFromOnDiskPath   => Out-param: UniqueID + Capture
-///   - createBlobFromOpenFile     => Out-param: UniqueID + Capture
-///   - Eventually: overloads with continuation out-param
-///   - Eventually: overloads with std::future out-param
-///
-/// InMemoryView : ObjectStore
-///   - View of objects; wraps any *other* ObjectStore
-///   - get{Blob,Node,Tree}        => InMemoryBlob*,InMemoryNode*,InMemoryTree*
-///   - create{Blob,Node,Tree}     => InMemoryBlob*,InMemoryNode*,InMemoryTree*
-///   - Eventually: overloads with continuation out-param
-///   - Eventually: overloads with std::future out-param
-///
-/// BuiltinCAS : ObjectStore
-///   - Implements (final) hasher part of API
-///
-/// BuiltinFileBasedCAS : BuiltinCAS
-/// BuiltinDatabaseCAS : BuiltinCAS
-/// (etc.)
-/// BuiltinNullCAS : BuiltinCAS
-///   - get() fails
-///   - create() returns out parameters but has no side effects
-///   - use with InMemoryView for an "in-memory CAS"
-///
-///
-/// Caching:
-/// ========
-///
-/// ActionCache
-///   - Constructed with a Namespace: needs to know size of hash
-///   - getIDSize()                                      => size_t
-///   - put: (StringRef, UniqueIDRef)                    => Error
-///   - get: (StringRef,
-///           SmallVectorImpl<uint8_t> &UniqueIDStorage) => Expected<UniqueIDRef>
-///   - get: (StringRef, Optional<UniqueID>&)            => Expected<UniqueID>
-///
-/// OnDiskActionCache
-///   - Key-value store on disk
-///   - For now: hash StringRef and use OnDiskHashMappedTrie
-///   - Eventually: compare against alternatives
-///
-/// InMemoryActionCache
-///   - Key-value store in memory
-///   - For now: hash StringRef and use ThreadSafeHashMappedTrie
-///   - Eventually: compare against sharding + locks
-///
-///
-/// Plugins:
-/// ========
-///
-/// - InMemoryView does not have plugins
-///     - Stores mapped memory and provies views of trees/blobs/etc.
-///
-/// - ObjectStorePlugin : ObjectStore
-///     - Move BuiltinCAS and subclasses into a plugin
-///     - Plugins should be out-of-process (in a daemon)
-///     - Use memory mapped IPC to avoid overhead / keep BuiltinCAS fast
-///     - Maybe: add an "in-memory store" plugin that's ephemeral, lasting just
-///       until the daemon shuts down but sharing work as long as the daemon
-///       lives
-///
-/// - ActionCachePlugin : ActionCache
-///     - Move OnDiskActionCache into a plugin
-///     - Plugins should be out-of-process (in a daemon)
-///     - Maybe: add an "in-memory cache" plugin that's ephemeral, lasting just
-///       until the daemon shuts down but sharing work as long as the daemon
-///       lives
-///
-
-class UniqueID;
-class UniqueIDRef;
-class Namespace {
-  virtual void anchor();
-
-public:
-  StringRef getName() const { return Name; }
-  size_t getHashSize() const { return HashSize; }
-
-  /// Print an ID.
-  virtual void printID(const UniqueIDRef &ID, raw_ostream &OS) const = 0;
-
-  /// Parse an ID.
-  virtual Error parseID(StringRef Reference, UniqueID &ID) const = 0;
-
-  Namespace() = delete;
-  Namespace(Namespace &&) = delete;
-  Namespace(const Namespace &) = delete;
-
-protected:
-  Namespace(StringRef Name, size_t HashSize)
-      : Name(Name.str()), HashSize(HashSize) {
-    assert(HashSize >= sizeof(size_t) && "Expected strong hash");
-  }
-
-private:
-  std::string Name;
-  const size_t HashSize;
-};
-
-class UniqueIDRef {
-  // Fixed set of expected sizes for hashes. Allows comparing hashes without
-  // chasing the Namespace pointer. Other sizes are still okay, but slower.
-  enum HashSize {
-    NotEmbedded,
-    Embedded20B, // 160 bits
-    Embedded32B, // 256 bits
-    // Can fill common values can go here.
-  };
-  enum : size_t {
-    // Expect hashes to be at least 16B.
-    MinHashSize = 16,
-  };
-
-public:
-  size_t getHashSize() const {
-    assert(NamespaceAndHashSize.getPointer() && "Expected valid namespace");
-
-    HashSize HS = NamespaceAndHashSize.getInt();
-    if (HS == Embedded20B)
-      return 20;
-    if (HS == Embedded32B)
-      return 32;
-    return NamespaceAndHashSize.getPointer()->getHashSize();
-  }
-
-  const Namespace &getNamespace() const {
-    assert(NamespaceAndHashSize.getPointer() && "Expected valid namespace");
-    return *NamespaceAndHashSize.getPointer();
-  }
-
-  ArrayRef<uint8_t> getHash() const {
-    return makeArrayRef(Hash, Hash + getHashSize());
-  }
-
-  friend bool operator==(UniqueIDRef LHS, UniqueIDRef RHS) {
-    if (LHS.NamespaceAndHashSize != RHS.NamespaceAndHashSize)
-      return false;
-    if (LHS.Hash == RHS.Hash)
-      return true;
-    if (makeArrayRef(LHS.Hash, MinHashSize) !=
-        makeArrayRef(RHS.Hash, MinHashSize))
-      return false;
-    return LHS.getHash().drop_front(MinHashSize) ==
-           RHS.getHash().drop_front(MinHashSize);
-  }
-  friend bool operator!=(UniqueIDRef LHS, UniqueIDRef RHS) {
-    return !(LHS == RHS);
-  }
-
-  uint64_t getHashValue() const {
-    uint64_t Value = 0;
-    for (size_t I = 0, E = sizeof(uint64_t); I != E; ++I)
-      Value |= Hash[I] << (I * 8);
-    return Value;
-  }
-
-  UniqueIDRef() = delete;
-  UniqueIDRef(UniqueIDRef &&) = default;
-  UniqueIDRef(const UniqueIDRef &) = default;
-  UniqueIDRef &operator=(UniqueIDRef &&) = default;
-  UniqueIDRef &operator=(const UniqueIDRef &) = default;
-
-  UniqueIDRef(const Namespace &NS, ArrayRef<uint8_t> Hash) : NS(&NS), Hash(Hash.begin()) {
-    assert(NS.getHashSize() >= MinHashSize && "Expected hash not to be small");
-    assert(NS.getHashSize() == Hash.size() && "Expected valid hash for namespace");
-    if (NS.getHashSize() == 20)
-      NS.setInt(Embedded20B);
-    else if (NS.getHashSize() == 32)
-      NS.setInt(Embedded32B);
-  }
-
-  struct DenseMapTombstoneTag {};
-  struct DenseMapEmptyTag {};
-
-  explicit UniqueIDRef(DenseMapTombstoneTag) :
-      : Hash(DenseMapInfo<ArrayRef<uint8_t>>::getTombstoneKey());
-  explicit UniqueIDRef(DenseMapEmptyTag) :
-      : Hash(DenseMapInfo<ArrayRef<uint8_t>>::getEmptyKey());
-
-private:
-  PointerIntPair<const Namespace *, 3> NamespaceAndHashSize;
-  const uint8_t *Hash = nullptr;
-};
-
-raw_ostream &operator<<(raw_ostream &OS, UniqueIDRef ID) {
-  ID.getNamespace().printID(ID, OS);
-  return OS;
-}
-
-hash_code hash_value(UniqueIDRef ID) { return hash_code(ID.getHashValue()); }
-
-} // namespace cas
-
-template <> struct DenseMapInfo<cas::UniqueIDRef> {
-  static cas::UniqueIDRef getEmptyKey() {
-    return cas::UniqueIDRef(cas::UniqueIDRef::DenseMapEmptyTag{});
-  }
-
-  static cas::UniqueIDRef getTombstoneKey() {
-    return cas::UniqueIDRef(cas::UniqueIDRef::DenseMapTombstoneTag{});
-  }
-
-  static unsigned getHashValue(cas::UniqueIDRef ID) { return ID.getHashValue(); }
-
-  static bool isEqual(cas::UniqueIDRef LHS, cas::UniqueIDRef RHS) {
-    return DenseMapInfo<ArrayRef<uint8_t>>::isEqual(LHS.getHash(),
-                                                    RHS.getHash());
-  }
-};
-
-namespace cas {
-
-/// A unique ID that owns its hash storage. Uses small string optimization for
-/// hashes under 32B.
-///
-/// May be uninitialized, possibly because it was moved-away from.
-class UniqueID {
-public:
-  explicit operator bool() const { return NS; }
-
-  const Namespace &getNamespace() const {
-    assert(NS && "Invalid namespace");
-    return *NS;
-  }
-  ArrayRef<uint8_t> getHash() const {
-    const uint8_t *HashPtr = isSmall() ? Storage.Hash : Storage.Mem;
-    return makeArrayRef(HashPtr, HashPtr + getNamespace().getHashSize());
-  }
-
-  operator UniqueIDRef() const { return UniqueIDRef(getNamespace(), getHash()); }
-
-  UniqueID() = default;
-  UniqueID(UniqueID &&ID) { moveImpl(ID); }
-  UniqueID(const UniqueID &ID) {
-    if (ID)
-      copyImpl(ID);
-  }
-
-  UniqueID &operator=(UniqueID &&ID) {
-    destroy();
-    return moveImpl(ID);
-  }
-  UniqueID &operator=(const UniqueID &ID) {
-    if (ID)
-      return copyImpl(ID);
-    destroy();
-    NS = nullptr;
-    return *this;
-  }
-
-  UniqueID(UniqueIDRef ID) { copyImpl(ID); }
-  UniqueID &operator=(UniqueIDRef ID) {
-    return copyImpl(ID);
-  }
-
-  ~UniqueID() { destroy(); }
-
-private:
-  void allocate() {
-    if (!isSmall())
-      Storage.Mem = new uint8_t[NS->getHashSize()];
-  }
-  void destroy() {
-    if (!isSmall())
-      delete[] Storage.Mem;
-  }
-  UniqueID &copyImpl(UniqueIDRef ID) {
-    if (NS != &ID.getNamespace()) {
-      destroy();
-      NS = &ID.getNamespace();
-      allocate();
-    }
-    memcpy(isSmall() ? Storage.Hash : Storage.Mem, Hash, Hash.size());
-    return *this;
-  }
-  UniqueID &moveImpl(UniqueID &ID) {
-    NS = ID.NS;
-    memcpy(&Storage, &ID.Storage, sizeof(Storage));
-    ID.NS = nullptr;
-    memset(&ID.Storage, sizeof(Storage), 0);
-    return *this;
-  }
-  constexpr inline size_t InlineHashSize = 32;
-  bool isSmall() const {
-    return !NS || NS->getNamespace().getHashSize() <= InlineHashSize;
-  }
-
-  const Namespace *NS = nullptr;
-  union {
-    const uint8_t *Mem = nullptr;
-    uint8_t Hash[InlineHashSize];
-  } Storage;
-};
-
-class FlatUniqueIDArrayRef {
-public:
-  class iterator : iterator_facade_base<iterator, std::random_access_iterator_tag, const UniqueIDRef,
-                                        ptrdiff_t, const UniqueIDRef *, UniqueIDRef> {
-    // FIXME: Merge from main, which already has this, and remove this copy's
-    // operator->() in favour of the default implementation in
-    // iterator_facade_base.
-    class PointerProxy {
-      friend iterator;
-      UniqueIDRef ID;
-
-    public:
-      const UniqueIDRef *operator->() const { return &ID; }
-    };
-
-  public:
-    UniqueIDRef operator*() const { return UniqueIDRef(makeArrayRef(I, I + Size)); }
-    PointerProxy operator->() const { return PointerProxy{**this}; }
-    iterator &operator++() { return *this += 1; }
-    iterator &operator--() { return *this -= 1; }
-    iterator &operator+=(ptrdiff_t Diff) {
-      I += Diff * HashSize;
-      return *this;
-    }
-    iterator &operator-=(ptrdiff_t Diff) {
-      I -= Diff * HashSize;
-      return *this;
-    }
-    bool operator<(iterator RHS) const { return I < RHS.I; }
-    ptrdiff_t operator-(iterator RHS) const { return (I - RHS.I) / HashSize; }
-
-  private:
-    friend FlatUniqueIDArrayRef;
-    iterator() = delete;
-    iterator(size_t HashSize, const uint8_t *I) : HashSize(HashSize), I(I) {}
-    size_t HashSize;
-    const uint8_t *I;
-  };
-
-  iterator begin() const { return iterator(HashSize, Hashes.begin()); }
-  iterator end() const { return iterator(HashSize, Hashes.end()); }
-  size_t size() const { return Hashes.size() / HashSize; }
-  bool empty() const { return Hashes.empty(); }
-  UniqueIDRef operator[](ptrdiff_t I) const { return begin()[I]; }
-
-  const Namespace &getNamespace() const { return Namespace; }
-  size_t getHashSize() const { return HashSize; }
-  ArrayRef<uint8_t> getFlatHashes() const { return FlatHashes; }
-
-  FlatUniqueIDArrayRef(const Namespace &NS, ArrayRef<uint8_t> FlatHashes)
-      : NS(&NS), FlatHashes(FlatHashes) {
-    size_t HashSize = NS.getHashSize();
-    assert(FlatHashes.size() / HashSize * HashSize == FlatHashes.size() &&
-           "Expected contiguous hashes");
-  }
-
-private:
-  const Namespace *NS = nullptr;
-  ArrayRef<uint8_t> FlatHashes;
 };
 
 class ObjectRef {
@@ -898,19 +506,124 @@ private:
   StringRef Data;
 };
 
+/// CAS Database. Hashes objects, stores them, provides in-memory lifetime, and
+/// maintains an action cache.
+///
+/// TODO: Split this up into four different APIs.
+///
+/// - ObjectHasher. Knows how to hash objects (blobs, trees, and nodes) to
+///   produce a UniqueID.
+///     - identify{Blob,Node,Tree}   => UniqueID
+///     - identify{Blob,Node,Tree}   => UniqueIDRef + out-param: SmallVectorImpl<uint8_t>&
+///     - Eventually: overloads for identify() with continuation out-param
+///     - Eventually: overloads for identify() with std::future out-param
+///
+/// - ObjectStore : ObjectHasher. Storage for objects. Has low-level "put" and
+///   "get" APIs suitable for receiving memory regions from another process,
+///   giving both clients and implementations leeway to provide raw memory
+///   regions or copy data out. APIs take a "Capture" out-parameter that
+///   configures the capabilities/preferences of the client.
+///     - get{Blob,Node,Tree}        => Out-param: Capture
+///     - create{Blob,Node,Tree}     => Out-param: UniqueID
+///     - create{Blob,Node,Tree}     => Out-param: UniqueID + Capture
+///     - createBlobFromOnDiskPath   => Out-param: UniqueID + Capture
+///     - createBlobFromOpenFile     => Out-param: UniqueID + Capture
+///     - Eventually: overloads with continuation out-param
+///     - Eventually: overloads with std::future out-param
+///     - A given ObjectHasher implementation can have various ObjectStore
+///       implementations, depending on configuration / use case. E.g., for the
+///       builtin CAS:
+///         - BuiltinSingleFileCAS: single file contains all CAS objects, suitable
+///           for an "opaque" artifact.
+///         - BuiltinFilePerObjectCAS: every CAS object in a separate file. Great for
+///           debugging the implementation.
+///         - BuiltinDatabaseCAS: Like the current \a BuiltinCAS.
+///         - BuiltinNullCAS: No storage. `get*()` APIs always fail, and
+///           `create*()` APIs don't do anything but produce a UniqueID. Useful
+///           for InMemoryCAS below.
+///
+/// - InMemoryView : ObjectStore. Concrete class (not abstract) that adapts another
+///   ObjectStore and provides an in-memory view of it. Guarantees in-memory lifetime
+///   for objects (via classes \c InMemoryBlob, \c InMemoryTree, and \c
+///   InMemoryNode). Re-exports the low-level ObjectStore APIs and adds new high-level
+///   APIs; uses the "Capture" out-parameters to get memory mapped regions from the
+///   adapted ObjectStore. Takes on the \a Namespace of the adapted ObjectStore.
+///     - \c InMemoryObject: Base class for objects. Has ID and hash size
+///       and subclass data. (\a ObjectRef becomes a non-null InMemoryObject).
+///     - \c InMemoryBlob: Adds char* for Data (S32|S16=>size).
+///     - \c InMemoryNode: Adds char* as Blob; Refs in uint8_t* with flat hash array.
+///     - \c InMemoryTree: Adds vtable and uint8_t*. S32=>Num.
+///     - get{Blob,Node,Tree}        => InMemoryBlob*,InMemoryNode*,InMemoryTree*
+///     - create{Blob,Node,Tree}     => InMemoryBlob*,InMemoryNode*,InMemoryTree*
+///     - Eventually: overloads with continuation out-param
+///     - Eventually: overloads with std::future out-param
+///     - Examples:
+///          - If an InMemoryView adapts a BuiltinDatabaseCAS, it should be
+///            equivalent to the current return of \a createOnDiskCAS().
+///          - If an InMemoryView adapts a BuiltinNullCAS, it should be
+///            equivalent to the current return of \a createInMemoryCAS().
+///
+/// - ActionCache. Assigned to a specific Namespace, is a cache/map from an
+///   arbitrary StringRef to a UniqueID. Must be in the same namespace as the
+///   IDs it stores.
+///     - put: (StringRef, UniqueIDRef)           => Error
+///     - get: (StringRef, UniqueID&)             => Error
+///     - get: (StringRef, Optional<UniqueIDRef>) => Error // provides lifetime
+///     - Concrete subclasses:
+///         - InMemory -- can use ThreadSafeHashMappedTrie
+///         - OnDisk -- can use OnDiskHashMappedTrie, but lots of options; needs
+///           configuration
+///         - Plugin -- simple plugin API for the cache itself
+///
+/// Plugins:
+/// ========
+///
+/// - InMemoryView does not have plugins
+///     - Stores mapped memory and provies views of trees/blobs/etc.
+///     - Adapts other ObjectStores
+///
+/// - ObjectStorePlugin : ObjectStore
+///     - Move BuiltinCAS and subclasses into a plugin
+///     - Plugins should be out-of-process (in a daemon)
+///     - Use memory mapped IPC to avoid overhead / keep BuiltinCAS fast
+///     - Maybe: add an "in-memory store" plugin that's ephemeral, lasting just
+///       until the daemon shuts down but sharing work as long as the daemon
+///       lives
+///
+/// - ActionCachePlugin : ActionCache
+///     - Move OnDiskActionCache into a plugin
+///     - Plugins should be out-of-process (in a daemon)
+///     - Maybe: add an "in-memory cache" plugin that's ephemeral, lasting just
+///       until the daemon shuts down but sharing work as long as the daemon
+///       lives
 class CASDB {
 public:
+  const Namespace &getNamespace() const { return NS; }
+
+  /// Convenience wrapper around \a Namespace::printID().
+  void printID(raw_ostream &OS, UniqueIDRef ID) const {
+    getNamespace().printID(OS, ID);
+  }
+
+  Error parseID(raw_ostream &OS, UniqueID &ID) const {
+    return getNamespace().parseID(OS, ID);
+  }
+
   /// Get a \p CASID from a \p Reference, which should have been generated by
   /// \a printCASID(). This succeeds as long as \p Reference is valid
   /// (correctly formatted); it does not refer to an object that exists, just
   /// be a reference that has been constructed correctly.
-  virtual Expected<CASID> parseCASID(StringRef Reference) = 0;
+  ///
+  /// TODO: Remove once callers use \a parseID().
+  Expected<CASID> parseCASID(StringRef Reference);
 
   /// Print \p ID to \p OS, returning an error if \p ID is not a valid \p CASID
   /// for this CAS. If \p ID is valid for the CAS schema but unknown to this
   /// instance (say, because it was generated by another instance), this should
   /// not return an error.
-  virtual Error printCASID(raw_ostream &OS, CASID ID) = 0;
+  ///
+  /// TODO: Remove once callers use \a printID().
+  Error printCASID(raw_ostream &OS, CASID ID);
 
   Expected<std::string> convertCASIDToString(CASID ID);
 
@@ -1018,6 +731,11 @@ protected:
     assert(ObjectPtr);
     return NodeRef(ID, *this, ObjectPtr, NumReferences, Data);
   }
+
+  CASDB(const Namespace &NS) : NS(NS) {}
+
+private:
+  const Namespace &NS;
 };
 
 Optional<NamedTreeEntry> TreeRef::lookup(StringRef Name) const {
@@ -1041,6 +759,7 @@ Error NodeRef::forEachReference(function_ref<Error(CASID)> Callback) const {
 
 Expected<std::unique_ptr<CASDB>>
 createPluginCAS(StringRef PluginPath, ArrayRef<std::string> PluginArgs = None);
+
 std::unique_ptr<CASDB> createInMemoryCAS();
 Expected<std::unique_ptr<CASDB>> createOnDiskCAS(const Twine &Path);
 
