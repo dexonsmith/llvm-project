@@ -23,14 +23,14 @@
 namespace llvm {
 namespace cas {
 
+class CASDB;
+
 /// Kind of CAS object.
 enum class ObjectKind {
   Blob, /// Data, with no references.
   Tree, /// Filesystem-style tree, with named references and entry types.
   Node, /// Abstract hierarchical node, with data and references.
 };
-
-class CASDB;
 
 /// Generic CAS object reference.
 class ObjectRef {
