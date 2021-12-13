@@ -26,7 +26,10 @@ class Namespace {
   virtual void anchor();
 
 public:
+  /// Returns an identifying name for the namespace.
   StringRef getName() const { return Name; }
+
+  /// Returns the size of a hash in bytes.
   size_t getHashSize() const { return HashSize; }
 
   /// Print \p ID to \p OS.
