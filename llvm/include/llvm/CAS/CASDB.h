@@ -25,7 +25,6 @@ namespace cas {
 
 /// Kind of CAS object.
 enum class ObjectKind {
-  Invalid, /// Invalid object kind.
   Blob, /// Data, with no references.
   Tree, /// Filesystem-style tree, with named references and entry types.
   Node, /// Abstract hierarchical node, with data and references.
