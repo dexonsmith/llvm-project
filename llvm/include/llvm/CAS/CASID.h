@@ -11,6 +11,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/CAS/UniqueID.h"
 
 namespace llvm {
 namespace cas {
@@ -31,6 +32,7 @@ public:
   }
 
   CASID() = delete;
+  CASID(UniqueIDRef ID) : Hash(ID.getHash()) {}
   explicit CASID(ArrayRef<uint8_t> Hash) : Hash(Hash) {}
   explicit operator ArrayRef<uint8_t>() const { return Hash; }
 

@@ -1,4 +1,4 @@
-//===- llvm/CAS/CASNamespace.h ----------------------------------*- C++ -*-===//
+//===- llvm/CAS/Namespace.h -------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CAS_CASNAMESPACE_H
-#define LLVM_CAS_CASNAMESPACE_H
+#ifndef LLVM_CAS_NAMESPACE_H
+#define LLVM_CAS_NAMESPACE_H
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -63,4 +63,4 @@ private:
 } // end namespace cas
 } // end namespace llvm
 
-#endif // LLVM_CAS_CASNAMESPACE_H
+#endif // LLVM_CAS_NAMESPACE_H

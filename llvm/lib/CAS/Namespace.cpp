@@ -1,4 +1,4 @@
-//===- CASNamespace.cpp -----------------------------------------*- C++ -*-===//
+//===- Namespace.cpp --------------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CAS/CASNamespace.h"
-#include "llvm/CAS/CASUniqueID.h"
+#include "llvm/CAS/Namespace.h"
+#include "llvm/CAS/UniqueID.h"
 
 using namespace llvm;
 using namespace llvm::cas;

@@ -9,11 +9,10 @@
 #ifndef LLVM_CAS_CASDB_H
 #define LLVM_CAS_CASDB_H
 
-#include "llvm/Support/AlignOf.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CAS/CASID.h"
-#include "llvm/CAS/CASNamespace.h"
+#include "llvm/CAS/Namespace.h"
 #include "llvm/CAS/TreeEntry.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h" // FIXME: Split out sys::fs::file_status.
@@ -456,7 +455,6 @@ Error NodeRef::forEachReference(function_ref<Error(CASID)> Callback) const {
 
 Expected<std::unique_ptr<CASDB>>
 createPluginCAS(StringRef PluginPath, ArrayRef<std::string> PluginArgs = None);
-
 std::unique_ptr<CASDB> createInMemoryCAS();
 Expected<std::unique_ptr<CASDB>> createOnDiskCAS(const Twine &Path);
 

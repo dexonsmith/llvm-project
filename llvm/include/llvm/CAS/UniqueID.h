@@ -1,4 +1,4 @@
-//===- llvm/CAS/CASUniqueID.h -----------------------------------*- C++ -*-===//
+//===- llvm/CAS/UniqueID.h --------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,13 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CAS_CASUNIQUEID_H
-#define LLVM_CAS_CASUNIQUEID_H
+#ifndef LLVM_CAS_UNIQUEID_H
+#define LLVM_CAS_UNIQUEID_H
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/PointerIntPair.h"
-#include "llvm/CAS/CASNamespace.h"
+#include "llvm/CAS/Namespace.h"
 
 namespace llvm {
 
@@ -247,4 +247,4 @@ private:
 } // end namespace cas
 } // end namespace llvm
 
-#endif // LLVM_CAS_CASUNIQUEID_H
+#endif // LLVM_CAS_UNIQUEID_H
