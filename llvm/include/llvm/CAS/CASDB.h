@@ -30,125 +30,7 @@ enum class ObjectKind {
   Node, /// Abstract hierarchical node, with data and references.
 };
 
-struct ObjectCapture {
-  inline constexpr size_t DefaultMinFileSize = 16 * 1024;
-};
-
-struct BlobCapture {
-  /// Structure for capturing data contained in a mapped_file_region.
-  struct MemoryMapped {
-    /// Minimum file size for a returned mapped region.
-    size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
-
-    /// If set to true, \a Data will only be set when \a IsNullTerminated is
-    /// true.
-    bool RequireNullTerminated = false;
-
-    Optional<bool> IsNullTerminated;
-    Optional<StringRef> Data;
-    mapped_file_region File;
-  };
-
-  BlobCapture(raw_ostream &Stream) : Stream(Stream) {}
-
-  /// Default way to capture the content of the blob. Use a raw_svector_ostream
-  /// or raw_string_stream to capture in a vector or string.
-  raw_ostream &Stream;
-
-  /// Set to non-null to support capturing data contained in an owned
-  /// mapped_file_region, when the CAS can provide one.
-  MemoryMapped *MappedFile = nullptr;
-};
-
-struct NodeCapture {
-  /// Structure for capturing persistent data with the same lifetime as the CAS.
-  struct PersistentData {
-    /// If set to true, \a Data will only be set when \a IsNullTerminated is true.
-    bool RequireNullTerminated = false;
-
-    Optional<bool> IsNullTerminated;
-    Optional<StringRef> Data;
-    Optional<FlatUniqueIDArrayRef> Refs;
-  };
-
-  /// Structure for capturing data contained in a mapped_file_region.
-  struct MemoryMapped : public BlobCapture::MemoryMapped {
-    /// Minimum file size for a returned mapped region.
-    size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
-
-    /// If set to true, only returend when \a IsNullTerminated is true.
-    bool RequireNullTerminated = false;
-
-    Optional<bool> IsNullTerminated;
-    Optional<StringRef> Data;
-    Optional<FlatUniqueIDArrayRef> Refs;
-    mapped_file_region File;
-  };
-
-  /// Structure for capturing streamed data (the default).
-  struct StreamedData {
-    raw_ostream &Data;
-    SmallVectorImpl<UniqueID> &Refs;
-  };
-
-  NodeCapture(StreamedData &Stream) : Stream(Stream) {}
-  StreamedData &Stream;
-  PersistentData *Persistent = nullptr;
-  MemoryMapped *MappedFile = nullptr;
-};
-
-struct TreeCapture {
-  /// Structure for capturing persistent data with the same lifetime as the CAS.
-  struct PersistentData {
-    Optional<TreeRef> Tree;
-  };
-
-  /// Structure for capturing data contained in a mapped_file_region.
-  struct MemoryMapped {
-    /// Minimum file size for a returned mapped region.
-    size_t MinFileSize = ObjectCapture::DefaultMinFileSize;
-
-    Optional<TreeRef> Tree;
-    mapped_file_region File;
-  };
-
-  /// Structure for capturing streamed data (the default).
-  struct StreamedData {
-    StringSaver &Strings;
-    SmallVectorImpl<NamedTreeEntry> &Entries;
-  };
-
-  TreeCapture(StreamedData &Stream) : Stream(Stream) {}
-  StreamedData &Stream;
-  PersistentData *Persistent = nullptr;
-  MemoryMapped *MappedFile = nullptr;
-};
-
 class CASDB;
-
-/// Wrapper around a raw hash-based identifier for a CAS object.
-class CASID {
-public:
-  ArrayRef<uint8_t> getHash() const { return Hash; }
-
-  friend bool operator==(CASID LHS, CASID RHS) {
-    return LHS.getHash() == RHS.getHash();
-  }
-  friend bool operator!=(CASID LHS, CASID RHS) {
-    return LHS.getHash() != RHS.getHash();
-  }
-
-  CASID() = delete;
-  explicit CASID(ArrayRef<uint8_t> Hash) : Hash(Hash) {}
-  explicit operator ArrayRef<uint8_t>() const { return Hash; }
-
-  friend hash_code hash_value(cas::CASID ID) {
-    return hash_value(ID.getHash());
-  }
-
-private:
-  ArrayRef<uint8_t> Hash;
-};
 
 /// Generic CAS object reference.
 class ObjectRef {
@@ -254,7 +136,8 @@ private:
 /// CAS Database. Hashes objects, stores them, provides in-memory lifetime, and
 /// maintains an action cache.
 ///
-/// TODO: Split this up into four different APIs.
+/// TODO: Split this up into four different APIs. Remaining description is for
+/// those APIs.
 ///
 /// - ObjectHasher. Knows how to hash objects (blobs, trees, and nodes) to
 ///   produce a UniqueID.
@@ -266,8 +149,8 @@ private:
 /// - ObjectStore : ObjectHasher. Storage for objects. Has low-level "put" and
 ///   "get" APIs suitable for receiving memory regions from another process,
 ///   giving both clients and implementations leeway to provide raw memory
-///   regions or copy data out. APIs take a "Capture" out-parameter that
-///   configures the capabilities/preferences of the client.
+///   regions or copy data out. APIs take a "Capture" out-parameter (see (far)
+///   below) that configures the capabilities/preferences of the client.
 ///     - get{Blob,Node,Tree}        => Out-param: Capture
 ///     - create{Blob,Node,Tree}     => Out-param: UniqueID
 ///     - create{Blob,Node,Tree}     => Out-param: UniqueID + Capture
@@ -293,11 +176,14 @@ private:
 ///   InMemoryNode). Re-exports the low-level ObjectStore APIs and adds new high-level
 ///   APIs; uses the "Capture" out-parameters to get memory mapped regions from the
 ///   adapted ObjectStore. Takes on the \a Namespace of the adapted ObjectStore.
-///     - \c InMemoryObject: Base class for objects. Has ID and hash size
-///       and subclass data. (\a ObjectRef becomes a non-null InMemoryObject).
-///     - \c InMemoryBlob: Adds char* for Data (S32|S16=>size).
-///     - \c InMemoryNode: Adds char* as Blob; Refs in uint8_t* with flat hash array.
-///     - \c InMemoryTree: Adds vtable and uint8_t*. S32=>Num.
+///     - \c InMemoryObject. Base class for objects. Has UniqueID (Namespace / hash size
+///       / hash). Probably change \a ObjectRef to wrap a non-null \c InMemoryObject*.
+///     - \c InMemoryBlob : InMemoryObject. Adds a StringRef for Data.
+///     - \c InMemoryNode : InMemoryObject. Adds a StringRef for Data. Adds
+///       ArrayRef containing a flat array of hashes (which combines with
+///       Namespace to make a FlatUniqueIDArrayRef).
+///     - \c InMemoryTree : InMemoryObject. Simplest to use a specific format and
+///       translate from underlying CAS object to make the in-memory view.
 ///     - get{Blob,Node,Tree}        => InMemoryBlob*,InMemoryNode*,InMemoryTree*
 ///     - create{Blob,Node,Tree}     => InMemoryBlob*,InMemoryNode*,InMemoryTree*
 ///     - Eventually: overloads with continuation out-param
@@ -324,8 +210,9 @@ private:
 /// ========
 ///
 /// - InMemoryView does not have plugins
-///     - Stores mapped memory and provies views of trees/blobs/etc.
-///     - Adapts other ObjectStores
+///     - Adapts other (concrete) ObjectStores
+///     - Stores mapped memory regions, as necessary
+///     - Provides views of trees/blobs/etc.
 ///
 /// - ObjectStorePlugin : ObjectStore
 ///     - Move BuiltinCAS and subclasses into a plugin
@@ -341,6 +228,71 @@ private:
 ///     - Maybe: add an "in-memory cache" plugin that's ephemeral, lasting just
 ///       until the daemon shuts down but sharing work as long as the daemon
 ///       lives
+///
+/// "Capture" out-parameters:
+/// =========================
+///
+/// For ObjectStore APIs, there are three axes:
+/// - How is the data stored? Is the ObjectStore able to provide direct access
+///   to it somehow? With what lifetime?
+/// - How sophisticated is the client? Given how the object is stored, is it
+///   able to use it directly and/or manage allocations?
+/// - How big is the object? What are the overhead tradeoffs for copying,
+///   managing allocations, and/or splitting up virtual memory?
+///   it directly? In managing extra allocations?
+///
+/// The proposed design is for each API to have a single out-parameter that the
+/// client uses to configure its capabilities, and the ObjectStore picks from
+/// the ones available to send data over. There should be a "default" transfer
+/// schema that all clients and all implementations/plugins support.
+///
+/// - BlobCapture
+///     - Stream: raw_ostream&. Default (client/store must both support).
+///       Client expected to configure with \a raw_svector_stream or similar.
+///     - Persistent: StringRef. Store guarantees lifetime as long as the CAS
+///       is alive. Client can set 'RequireNullTerminated', in which case store
+///       should not use unless it's able to guarantee a null-terminated view.
+///     - Managed: (StringRef,Destructor). Lifetime managed by client. A \c
+///       std::unique-ptr<MemoryBuffer> or equivalent. 'RequiresMinSize' can
+///       be set to disallow use when blobs are too small (e.g., the client
+///       may want to copy to bump-ptr-allocated memory and skip the allocation
+///       traffic past a given threshold).
+/// - NodeCapture
+///     - Stream: (raw_ostream&,SmallVectorImpl<UniqueID>&). Default. Data is
+///       streamed; refs are appended.
+///     - Persistent: (StringRef,FlatUniqueIDArrayRef). Guaranteed lifetime.
+///       Client can set 'RequireNullTerminated' for the data.
+///     - Managed: (StringRef,FlatUniqueIDArrayRef,Destructor). Lifetime
+///       managed by client. 'RequiresMinSize' (sum of storage) can be set to
+///       disallow use when nodes are too small (e.g., the client may want to
+///       copy to bump-ptr-allocated memory and skip the allocation traffic
+///       past a given threshold).
+/// - TreeCapture
+///     - Visitor: (function_ref<Error(const NamedTreeEntry&)>). Default.
+///       Entries visited one at a time.
+///     - Vector: (SmallVectorImpl<NamedTreeEntry>&,StringSaver*=nulltpr,
+///                UniqueIDSaver*=nullptr).
+///       Entries pushed back. Each NamedTreeEntry::getName() and \a
+///       TreeEntry::getID() must have guaranteed lifetime, unless optional
+///       StringSaver and UniqueIDSaver provided. Names required to be
+///       null-terminated.
+///     - Persistent: (FlatUniqueIDArrayRef,StringRef,ArrayRef<Encoding>).
+///       Return flat array of entry IDs, name block, and array of some
+///       encoded data for EntryKind and NameOffset. There could be many
+///       encodings; simplest way to start is to require a specific encoding
+///       that is convenient for InMemoryTree to wrap BuiltinCAS, and if a
+///       specific ObjectStore cannot provide it, fall back to Vector or
+///       Visitor. Other plugins would likely fall back to Visitor essentially
+///       all the time. If this leaves perf on the floor in practice, we can
+///       design something more flexible that solves the problem better (e.g.,
+///       support a fixed set of schemas/encodings, or virtualize decoding
+///       function, or ...).
+///     - Managed: (FlatUniqueIDArrayRef,StringRef,ArrayRef<Encoding>,
+///                 Destructor).
+///       As with Persistent, but with a managed lifetime. 'RequiresMinSize'
+///       (sum of storage) can be set to disallow use when nodes are too small
+///       e.g., the client may want to copy to bump-ptr-allocated memory and
+///       skip the allocation traffic past a given threshold).
 class CASDB {
 public:
   const Namespace &getNamespace() const { return NS; }

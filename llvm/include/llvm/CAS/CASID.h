@@ -16,6 +16,9 @@ namespace llvm {
 namespace cas {
 
 /// Wrapper around a raw hash-based identifier for a CAS object.
+///
+/// TODO: Replace usage with \a UniqueIDRef and \a UniqueID as appropriate,
+/// then remove this.
 class CASID {
 public:
   ArrayRef<uint8_t> getHash() const { return Hash; }
