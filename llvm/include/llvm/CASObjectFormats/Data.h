@@ -34,16 +34,16 @@ SectionProtectionFlags encodeProtectionFlags(jitlink::MemProt Perms);
 
 /// Flags for a symbol.
 enum class SymbolFlags : unsigned short {
-  /// Symbols are undefined by default.
-  Undefined = 0U,
-
-  /// Alias for \a Undefined.
-  Default = 0U,
+  /// No flags.
+  None = 0U,
 
   /// Callable.
   ///
   /// LLVM IR: function, ifuncs, and aliases of functions and ifuncs.
-  Callable = 1U,
+  Callable = 1U << 0,
+
+  /// Defined. (Otherwise, undefined / external / declaration only.)
+  Defined = 1U << 1,
 
   /// Exported. May be referenced by other compile units (and barring other
   /// flags, other linkage units).
@@ -51,26 +51,26 @@ enum class SymbolFlags : unsigned short {
   /// Requires: !Undefined.
   ///
   /// LLVM IR: not "internal" or "private".
-  Exported = 1U << 1,
+  Exported = Defined | 1U << 2,
 
   /// Weak linkage: one definition is selected at link time.
   ///
   /// LLVM IR: "common", "weak", "weak_odr", "linkonce", and "linkonce_odr".
-  Weak = Exported | 1U << 2,
+  Weak = Exported | 1U << 3,
 
   /// Exported from the compile unit, but not the linkage unit. Can be
   /// referenced from other compile units.
   ///
-  /// The link effectively downgrades to \a Local by not including this in the
+  /// The link effectively downgrades to local by not including this in the
   /// dynamic symbol table.
   ///
   /// LLVM IR: "hidden" visibility.
-  Hidden = Exported | 1U << 3,
+  Hidden = Exported | 1U << 4,
 
   /// Exported, but cannot be overridden. Only relevant for ELF.
   ///
   /// LLVM IR: "protected" visibility.
-  Protected = Exported | 1U << 4,
+  Protected = Exported | 1U << 5,
 
   /// Bits for visibility. Mutually exclusive.
   VisibilityFlags = (Hidden | Protected) & ~Exported,
@@ -80,19 +80,19 @@ enum class SymbolFlags : unsigned short {
   ///
   /// LLVM IR: "linkonce" and "linkonce_odr". "available_externally" also
   /// matches this, although LLVM always discards it before lowering.
-  Discardable = Exported | 1U << 5,
+  Discardable = Exported | 1U << 6,
   Linkonce = Weak | Discardable,
 
   /// "One definition rule". Language guarantee that other exported symbols
   /// with the same name are semantically equivalent.
   ///
   /// LLVM IR: "weak_odr" and "linkonce_odr".
-  ODR = Exported | 1U << 6,
+  ODR = Exported | 1U << 7,
   WeakODR = Weak | ODR,
   LinkonceODR = Linkonce | ODR,
 
   /// Bits that depend on \a Exported.
-  ExportedFlags = Exported | Weak | Hidden | ODR | Discardable,
+  ExportedFlags = (Exported | Weak | Hidden | ODR | Discardable) & ~Defined,
 
   /// Address is not taken for comparison locally. If exported, it's possible
   /// that another compile unit or linkage unit takes its address and compares
@@ -104,7 +104,7 @@ enum class SymbolFlags : unsigned short {
   /// GlobalUnnamedAddress.
   ///
   /// LLVM IR: "local_unnamed_addr" and "unnamed_addr".
-  UnnamedAddress = 1U << 7,
+  UnnamedAddress = Defined | 1U << 8,
 
   /// Address known not to be taken. Typically, if !Exported and UnnamedAddress
   /// and constant, then GlobalUnnamedAddress.
@@ -112,7 +112,7 @@ enum class SymbolFlags : unsigned short {
   /// If !Exported, this can be deduplicated / CSE'd with any symbol
   /// that has equivalent content.
   /// LLVM IR: "unnamed_addr".
-  GlobalUnnamedAddress = UnnamedAddress | 1U << 8,
+  GlobalUnnamedAddress = UnnamedAddress | 1U << 9,
 
   /// Bits that depend on \a UnnamedAddress.
   UnnamedAddressFlags = UnnamedAddress | GlobalUnnamedAddress,
@@ -129,23 +129,18 @@ enum class SymbolFlags : unsigned short {
   ///
   /// FIXME: Can we find a way to safely remove this flag? It's mostly implied
   /// by others.
-  Autohide = AutohideDependencies | 1U << 9,
-  AutohideFlags = Autohide & ~AutohideDependencies;
-
-  /// Undefined / externally defined.
-  ///
-  /// Requires: !Exported.
-  ///
-  /// LLVM IR: declarations ("declare").
-  Undefined = 1U << 10,
+  Autohide = AutohideDependencies | 1U << 10,
+  AutohideFlags = Autohide & ~AutohideDependencies,
 
   /// Undefined / externally defined, or possibly null.
+  ///
+  /// Requires: !Defined.
   ///
   /// LLVM IR: "extern_weak" linkage.
   ExternWeak = 1U << 11,
 
-  /// Bits that require a symbol is undefined (not \a Local and not \a
-  /// Exported). No other bits are valid if one of these is set.
+  /// Bits that require !Defined. No other bits are valid if one of these is
+  /// set.
   UndefinedFlags = ExternWeak,
 
   /// As-if there's another reference that cannot be seen. This cannot be
@@ -155,7 +150,7 @@ enum class SymbolFlags : unsigned short {
   /// HasInvertedLivenessEdge below.
   ///
   /// LLVM IR: member of "!llvm.used".
-  ImplicitlyUsed = 1U << 12,
+  ImplicitlyUsed = Defined | 1U << 12,
 
   /// Flag to indicate that the definition has an outgoing edge that has
   /// "inverted" liveness semantics. Such an edge means that instead of the
@@ -186,7 +181,7 @@ enum class SymbolFlags : unsigned short {
   /// file formats, @desc would be lowered as-if in "!llvm.used". But in this
   /// one, its edge to @global would be marked with inverted liveness and the
   /// symbol would have \a HasInvertedLivenessEdge set.
-  HasInvertedLivenessEdge = Local | 1U << 13,
+  HasInvertedLivenessEdge = Defined | 1U << 13,
 
   /// Flag to indicate this is a template in the object format encoding. This
   /// helps to improve deduplication of EH frame symbols in the nestedv1
@@ -196,72 +191,85 @@ enum class SymbolFlags : unsigned short {
   ///
   /// FIXME: Stop relying on this and remove it. Note that flatv1 uses this for
   /// all blocks/symbols.
-  EncodingTemplate = Local | 1U << 14,
+  EncodingTemplate = Defined | 1U << 14,
 
-  LocalFlags = Local | HasInvertedLivenessEdge | EncodingTemplate,
+  /// Bits that are only valid if Defined and !Exported.
+  LocalFlags = (HasInvertedLivenessEdge | EncodingTemplate) & ~Defined,
+
+  /// Bits that are only valid if Defined.
+  DefinedFlags = Defined | ExportedFlags | LocalFlags | UnnamedAddressFlags | ImplicitlyUsed,
 
   /// Bits that must not be set if Exported.
-  IllegalFlagsIfExported = UndefinedFlags | LocalFlags,
-
-  /// Bits that must not be set if Local.
-  IllegalFlagsIfLocal = UndefinedFlags | ExportedFlags,
+  IllegalFlagsIfDefined = UndefinedFlags,
 
   /// Bits that must not be set if Undefined. That's almost everything.
-  IllegalFlagsIfUndefined = ~UndefinedFlags,
+  IllegalFlagsIfUndefined = DefinedFlags,
 
-  LLVM_MARK_AS_BITMASK_ENUM(/*LargestValue=*/EncodingTemplate);
+  /// Bits that must not be set if Exported.
+  IllegalFlagsIfExported = IllegalFlagsIfDefined | LocalFlags,
+
+  /// Bits that must not be set if Local.
+  IllegalFlagsIfLocal = IllegalFlagsIfDefined | ExportedFlags,
+
+  LLVM_MARK_AS_BITMASK_ENUM(/*LargestValue=*/EncodingTemplate)
 };
 LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
 
 /// Container for \a SymbolFlags that has convenient accessors and knows how to
 /// encode itself.
 class SymbolAttributes {
+  bool test(SymbolFlags TestFlags) const { return (Flags & TestFlags) != SymbolFlags::None; }
+
 public:
   SymbolFlags getFlags() const { return Flags; }
 
-  bool isCallable() const { return Flags & SymbolFlags::Callable; }
+  bool isCallable() const { return test(SymbolFlags::Callable); }
 
-  bool isLocal() const { return !isUndefined() && !isExported(); }
+  bool isDefined() const { return test(SymbolFlags::Defined); }
+  bool isLocal() const { return !isDefined() && !isExported(); }
 
-  bool isUndefined() const { return Flags & SymbolFlags::Undefined; }
-  bool isExternWeak() const { return Flags & SymbolFlags::ExternWeak; }
+  bool isUndefined() const { return !isDefined(); }
+  bool isExternWeak() const { return test(SymbolFlags::ExternWeak); }
   bool isExternStrong() const { return isUndefined() && !isExternWeak(); }
 
-  bool isExported() const { return Flags & SymbolFlags::Exported; }
-  bool isWeak() const { return Flags & SymbolFlags::Weak; }
-  bool isHidden() const { return Flags & SymbolFlags::Hidden; }
-  bool isProtected() const { return Flags & SymbolFlags::Protected; }
-  bool isDiscardable() const { return Flags & SymbolFlags::Discardable; }
-  bool isLinkonce() const { return Flags & SymbolFlags::Linkonce; }
-  bool isWeakODR() const { return Flags & SymbolFlags::WeakODR; }
-  bool isLinkonceODR() const { return Flags & SymbolFlags::LinkonceODR; }
+  bool isExported() const { return test(SymbolFlags::Exported); }
+  bool isWeak() const { return test(SymbolFlags::Weak); }
+  bool isHidden() const { return test(SymbolFlags::Hidden); }
+  bool isProtected() const { return test(SymbolFlags::Protected); }
+  bool isDiscardable() const { return test(SymbolFlags::Discardable); }
+  bool isLinkonce() const { return test(SymbolFlags::Linkonce); }
+  bool isWeakODR() const { return test(SymbolFlags::WeakODR); }
+  bool isLinkonceODR() const { return test(SymbolFlags::LinkonceODR); }
 
-  bool isUnnamedAddress() const { return Flags & SymbolFlags::UnnamedAddress; }
+  bool isUnnamedAddress() const { return test(SymbolFlags::UnnamedAddress); }
   bool isGlobalUnnamedAddress() const {
-    return Flags & SymbolFlags::GlobalUnnamedAddress;
+    return test(SymbolFlags::GlobalUnnamedAddress);
   }
   bool isLocalUnnamedAddress() const {
     return isUnnamedAddress() && !isGlobalUnnamedAddress();
   }
 
-  bool isAutohide() const { return Flags & SymbolFlags::Autohide; }
+  bool isAutohide() const { return test(SymbolFlags::Autohide); }
 
-  bool isImplicitlyUsed() const { return Flags & SymbolFlags::ImplicitlyUsed; }
+  bool isImplicitlyUsed() const { return test(SymbolFlags::ImplicitlyUsed); }
 
   bool hasInvertedLivenessEdge() const {
-    return Flags & SymbolFlags::HasInvertedLivenessEdge;
+    return test(SymbolFlags::HasInvertedLivenessEdge);
   }
 
   bool isEncodingTemplate() const {
-    return Flags & SymbolFlags::EncodingTemplate;
+    return test(SymbolFlags::EncodingTemplate);
   }
 
   /// Set the new flags, dropping most no-longer-valid conflicting flags.
   void set(SymbolFlags NewFlags) {
-    if (NewFlags & SymbolFlags::Local)
-      Flags &= ~SymbolFlags::IllegalFlagsIfLocal;
-    if (NewFlags & SymbolFlags::Exported)
+    if ((NewFlags & SymbolFlags::Exported) != SymbolFlags::None)
       Flags &= ~SymbolFlags::IllegalFlagsIfExported;
+    else if ((NewFlags & SymbolFlags::Defined) != SymbolFlags::None)
+      Flags &= ~SymbolFlags::IllegalFlagsIfLocal;
+    else
+      Flags &= ~SymbolFlags::IllegalFlagsIfUndefined;
+
     if (NewFlags & SymbolFlags::VisibilityFlags)
       Flags &= ~SymbolFlags::VisibilityFlags;
 
@@ -271,30 +279,33 @@ public:
 
   /// Reset flags, also dropping no-longer-valid derivative flags.
   void reset(SymbolFlags FlagsToDrop) {
-    if (FlagsToDrop & SymbolFlags::Local)
-      Flags &= ~SymbolFlags::LocalFlags;
-    if (FlagsToDrop & SymbolFlags::Exported)
+    if ((FlagsToDrop & SymbolFlags::Defined) != SymbolFlags::None)
+      Flags &= ~SymbolFlags::DefinedFlags;
+    if ((FlagsToDrop & SymbolFlags::Exported) != SymbolFlags::None)
       Flags &= ~SymbolFlags::ExportedFlags;
-    if (FlagsToDrop & SymbolFlags::UnnamedAddress)
+    if ((FlagsToDrop & SymbolFlags::UnnamedAddress) != SymbolFlags::None)
       Flags &= ~SymbolFlags::UnnamedAddressFlags;
-    if (FlagsToDrop & SymbolFlags::Autohide)
+    if ((FlagsToDrop & SymbolFlags::Autohide) != SymbolFlags::None)
       Flags &= ~SymbolFlags::AutohideFlags;
 
     Flags &= ~FlagsToDrop;
     assert(isValid() && "Expected valid flag combination");
   }
 
-  /// Set to a local symbol, dropping any of SymbolFlags::Exported and
-  /// SymbolFlags::Undefined.
-  void setLocal(SymbolFlags NewFlags = SymbolFlags::Local) {
-    assert((NewFlags & SymbolFlags::Local) && "Expected exported symbol");
-    set(NewFlags);
+  /// Set to a local symbol, dropping any flags that require Exported or
+  /// !Defined, and adding \p NewFlags.
+  void setLocal(SymbolFlags NewFlags = SymbolFlags::Defined) {
+    assert(!(NewFlags & SymbolFlags::Exported) && "Expected local symbol");
+
+    reset(SymbolFlags::IllegalFlagsIfLocal);
+    set(NewFlags | SymbolFlags::Defined);
   }
 
-  /// Set to an exported symbol. Can \p Extras.
+  /// Set to an exported symbol, dropping any flags that require !Exported or
+  /// !Defined, and adding \p NewFlags.
   void setExported(SymbolFlags NewFlags = SymbolFlags::Exported) {
-    assert((NewFlags & SymbolFlags::Exported) && "Expected exported symbol");
-    set(NewFlags);
+    reset(SymbolFlags::IllegalFlagsIfExported);
+    set(NewFlags | SymbolFlags::Exported);
   }
 
   /// Set to an exported symbol with \p Visibility. Passing \a
@@ -308,7 +319,7 @@ public:
     setExported(Visibility);
   }
 
-  void setUndefined() { reset(SymbolFlags::Exported | SymbolFlags::Local); }
+  void setUndefined() { reset(SymbolFlags::IllegalFlagsIfUndefined); }
   void setExternWeak() {
     setUndefined();
     set(SymbolFlags::ExternWeak);
