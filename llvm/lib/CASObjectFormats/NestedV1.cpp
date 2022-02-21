@@ -976,10 +976,6 @@ cl::opt<bool> UseAutoHideDuringIngestion(
     "use-autohide-during-ingestion",
     cl::desc("Use Mach-O autohide bit during ingestion."), cl::init(true));
 
-cl::opt<bool> UseDeadStripCompileForLocals(
-    "use-dead-strip-compile-for-locals",
-    cl::desc("Use DeadStrip=CompileUnit for local symbols."), cl::init(true));
-
 cl::opt<bool> DeadStripByDefault(
     "dead-strip",
     cl::desc("Dead-strip unreferenced symbols in any section. Use "
@@ -1051,13 +1047,8 @@ data::SymbolAttributes SymbolRef::getAttributes(const jitlink::Symbol &S) {
   auto Attrs = data::SymbolAttributes::get(S);
 
   // Check for command-line argument that force "S" to be kept alive.
-  if (Attrs.getKeepAlive() != data::KeepAlive::Always && shouldKeepAlive(S))
-    Attrs.setKeepAlive(data::KeepAlive::Always);
-
-  // FIXME: Stop using UseDeadStripCompileForLocals, and instead set
-  // KeepAlive::Referenced only when it's safe.
-  if (UseDeadStripCompileForLocals && Attrs.isLocal() && !Attrs.isUsed())
-    Attrs.setKeepAlive(data::KeepAlive::Referenced);
+  if (!Attrs.isImplicitlyUsed() && shouldKeepAlive(S))
+    Attrs.set(data::SymbolFlags::ImplicitlyUsed);
 
   return Attrs;
 }

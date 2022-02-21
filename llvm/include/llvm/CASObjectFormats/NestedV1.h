@@ -563,7 +563,7 @@ private:
 /// - IsCallable: cache of EXEC bit on the block.
 ///
 /// FIXME: Pass through more of information from LLVM. For example, if a symbol
-/// is marked \p DS_Never then \p isAutoHide() will always return false, but
+/// is marked \p DS_Never then \p isAutohide() will always return false, but
 /// that may incur information loss for the client.
 class SymbolRef : public SpecificRef<SymbolRef> {
   using SpecificRefT = SpecificRef<SymbolRef>;
@@ -587,17 +587,8 @@ public:
     return cantFail(data::SymbolAttributes::decode(
         getData().take_front(data::SymbolAttributes::EncodedSize)));
   }
-  data::Scope getScope() const { return getAttributes().getScope(); }
-  data::Hiding getHiding() const { return getAttributes().getHiding(); }
-  data::Linkage getLinkage() const { return getAttributes().getLinkage(); }
-  data::KeepAlive getKeepAlive() const {
-    return getAttributes().getKeepAlive();
-  }
-  data::UnnamedAddress getUnnamedAddress() const {
-    return getAttributes().getUnnamedAddress();
-  }
 
-  bool isAutoHide() const { return getAttributes().isAutoHide(); }
+  bool isAutohide() const { return getAttributes().isAutohide(); }
 
   cas::CASID getDefinitionID() const { return getReference(0); }
   Optional<cas::CASID> getNameID() const {

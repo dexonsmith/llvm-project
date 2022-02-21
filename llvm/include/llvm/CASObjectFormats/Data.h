@@ -34,8 +34,8 @@ SectionProtectionFlags encodeProtectionFlags(jitlink::MemProt Perms);
 
 /// Flags for a symbol.
 enum class SymbolFlags : unsigned short {
-  /// No flags.
-  None = 0U,
+  /// Defaults.
+  Default = 0U,
 
   /// Callable.
   ///
@@ -218,59 +218,66 @@ LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
 /// Container for \a SymbolFlags that has convenient accessors and knows how to
 /// encode itself.
 class SymbolAttributes {
-  bool test(SymbolFlags TestFlags) const { return (Flags & TestFlags) != SymbolFlags::None; }
-
 public:
+  static bool testAll(SymbolFlags Flags, SymbolFlags TestFlags) {
+    return (Flags & TestFlags) == TestFlags;
+  }
+  static bool testAny(SymbolFlags Flags, SymbolFlags TestFlags) {
+    return (Flags & TestFlags) != SymbolFlags::Default;
+  }
+  bool testAll(SymbolFlags TestFlags) const { return testAll(Flags, TestFlags); }
+  bool testAny(SymbolFlags TestFlags) const { return testAny(Flags, TestFlags); }
+
   SymbolFlags getFlags() const { return Flags; }
 
-  bool isCallable() const { return test(SymbolFlags::Callable); }
+  bool isCallable() const { return testAll(SymbolFlags::Callable); }
 
-  bool isDefined() const { return test(SymbolFlags::Defined); }
+  bool isDefined() const { return testAll(SymbolFlags::Defined); }
   bool isLocal() const { return !isDefined() && !isExported(); }
 
   bool isUndefined() const { return !isDefined(); }
-  bool isExternWeak() const { return test(SymbolFlags::ExternWeak); }
+  bool isExternWeak() const { return isUndefined() && testAll(SymbolFlags::ExternWeak); }
   bool isExternStrong() const { return isUndefined() && !isExternWeak(); }
 
-  bool isExported() const { return test(SymbolFlags::Exported); }
-  bool isWeak() const { return test(SymbolFlags::Weak); }
-  bool isHidden() const { return test(SymbolFlags::Hidden); }
-  bool isProtected() const { return test(SymbolFlags::Protected); }
-  bool isDiscardable() const { return test(SymbolFlags::Discardable); }
-  bool isLinkonce() const { return test(SymbolFlags::Linkonce); }
-  bool isWeakODR() const { return test(SymbolFlags::WeakODR); }
-  bool isLinkonceODR() const { return test(SymbolFlags::LinkonceODR); }
+  bool isExported() const { return testAll(SymbolFlags::Exported); }
+  bool isWeak() const { return testAll(SymbolFlags::Weak); }
+  bool isHidden() const { return testAll(SymbolFlags::Hidden); }
+  bool isProtected() const { return testAll(SymbolFlags::Protected); }
+  bool isDiscardable() const { return testAll(SymbolFlags::Discardable); }
+  bool isLinkonce() const { return testAll(SymbolFlags::Linkonce); }
+  bool isWeakODR() const { return testAll(SymbolFlags::WeakODR); }
+  bool isLinkonceODR() const { return testAll(SymbolFlags::LinkonceODR); }
 
-  bool isUnnamedAddress() const { return test(SymbolFlags::UnnamedAddress); }
+  bool isUnnamedAddress() const { return testAll(SymbolFlags::UnnamedAddress); }
   bool isGlobalUnnamedAddress() const {
-    return test(SymbolFlags::GlobalUnnamedAddress);
+    return testAll(SymbolFlags::GlobalUnnamedAddress);
   }
   bool isLocalUnnamedAddress() const {
     return isUnnamedAddress() && !isGlobalUnnamedAddress();
   }
 
-  bool isAutohide() const { return test(SymbolFlags::Autohide); }
+  bool isAutohide() const { return testAll(SymbolFlags::Autohide); }
 
-  bool isImplicitlyUsed() const { return test(SymbolFlags::ImplicitlyUsed); }
+  bool isImplicitlyUsed() const { return testAll(SymbolFlags::ImplicitlyUsed); }
 
   bool hasInvertedLivenessEdge() const {
-    return test(SymbolFlags::HasInvertedLivenessEdge);
+    return testAll(SymbolFlags::HasInvertedLivenessEdge);
   }
 
   bool isEncodingTemplate() const {
-    return test(SymbolFlags::EncodingTemplate);
+    return testAll(SymbolFlags::EncodingTemplate);
   }
 
   /// Set the new flags, dropping most no-longer-valid conflicting flags.
   void set(SymbolFlags NewFlags) {
-    if ((NewFlags & SymbolFlags::Exported) != SymbolFlags::None)
+    if (testAll(NewFlags, SymbolFlags::Exported))
       Flags &= ~SymbolFlags::IllegalFlagsIfExported;
-    else if ((NewFlags & SymbolFlags::Defined) != SymbolFlags::None)
+    else if (testAll(NewFlags, SymbolFlags::Defined))
       Flags &= ~SymbolFlags::IllegalFlagsIfLocal;
     else
       Flags &= ~SymbolFlags::IllegalFlagsIfUndefined;
 
-    if (NewFlags & SymbolFlags::VisibilityFlags)
+    if (testAny(NewFlags, SymbolFlags::VisibilityFlags))
       Flags &= ~SymbolFlags::VisibilityFlags;
 
     Flags |= NewFlags;
@@ -279,13 +286,13 @@ public:
 
   /// Reset flags, also dropping no-longer-valid derivative flags.
   void reset(SymbolFlags FlagsToDrop) {
-    if ((FlagsToDrop & SymbolFlags::Defined) != SymbolFlags::None)
+    if (testAll(FlagsToDrop, SymbolFlags::Defined))
       Flags &= ~SymbolFlags::DefinedFlags;
-    if ((FlagsToDrop & SymbolFlags::Exported) != SymbolFlags::None)
+    if (testAll(FlagsToDrop, SymbolFlags::Exported))
       Flags &= ~SymbolFlags::ExportedFlags;
-    if ((FlagsToDrop & SymbolFlags::UnnamedAddress) != SymbolFlags::None)
+    if (testAll(FlagsToDrop, SymbolFlags::UnnamedAddress))
       Flags &= ~SymbolFlags::UnnamedAddressFlags;
-    if ((FlagsToDrop & SymbolFlags::Autohide) != SymbolFlags::None)
+    if (testAll(FlagsToDrop, SymbolFlags::Autohide))
       Flags &= ~SymbolFlags::AutohideFlags;
 
     Flags &= ~FlagsToDrop;
@@ -295,7 +302,7 @@ public:
   /// Set to a local symbol, dropping any flags that require Exported or
   /// !Defined, and adding \p NewFlags.
   void setLocal(SymbolFlags NewFlags = SymbolFlags::Defined) {
-    assert(!(NewFlags & SymbolFlags::Exported) && "Expected local symbol");
+    assert(!testAll(NewFlags, SymbolFlags::Exported) && "Expected local symbol");
 
     reset(SymbolFlags::IllegalFlagsIfLocal);
     set(NewFlags | SymbolFlags::Defined);
@@ -354,12 +361,15 @@ public:
     return OS;
   }
 
+  using SymbolAttributesEncodingT = uint64_t;
+  enum : size_t { EncodedSize = sizeof(SymbolAttributesEncodingT) };
   void encode(SmallVectorImpl<char> &Data) const;
   static Expected<SymbolAttributes> decode(StringRef Data);
   static Expected<SymbolAttributes> consume(StringRef &Data);
 
   static SymbolAttributes get(const jitlink::Symbol &Symbol);
 
+  SymbolAttributes() = default;
   explicit SymbolAttributes(SymbolFlags Flags) : Flags(Flags) {
     assert(isValid() && "Expected valid symbol attributes");
   }
