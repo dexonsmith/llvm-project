@@ -210,7 +210,7 @@ public:
   // FIXME: Support "huge" bit?
   static constexpr StringLiteral KindString = "cas.o:section";
 
-  cas::CASID getNameID() const { return getReference(0); }
+  cas::CASID getNameID() const { return getReferenceID(0); }
   Expected<NameRef> getName() const {
     return NameRef::get(getSchema(), getNameID());
   }
@@ -347,7 +347,7 @@ public:
   Expected<TargetRef> operator[](size_t I) const { return get(I); }
   Expected<TargetRef> get(size_t I) const {
     assert(I < size() && "past the end");
-    return TargetRef::get(Node->getSchema(), Node->getReference(I + First));
+    return TargetRef::get(Node->getSchema(), Node->getReferenceID(I + First));
   }
 
   TargetList() = default;
@@ -493,8 +493,8 @@ public:
   bool hasAbstractBackedge() const { return Flags.HasAbstractBackedge; }
   bool hasKeepAliveEdge() const { return Flags.HasKeepAliveEdge; }
 
-  cas::CASID getSectionID() const { return getReference(0); }
-  cas::CASID getDataID() const { return getReference(1); }
+  cas::CASID getSectionID() const { return getReferenceID(0); }
+  cas::CASID getDataID() const { return getReferenceID(1); }
 
 private:
   Optional<size_t> getTargetsIndex() const;
@@ -657,9 +657,9 @@ public:
            getMerge() == M_ByNameOrContent;
   }
 
-  cas::CASID getDefinitionID() const { return getReference(0); }
+  cas::CASID getDefinitionID() const { return getReferenceID(0); }
   Optional<cas::CASID> getNameID() const {
-    return hasName() ? getReference(1) : Optional<cas::CASID>();
+    return hasName() ? getReferenceID(1) : Optional<cas::CASID>();
   }
 
   Expected<SymbolDefinitionRef> getDefinition() const {
@@ -716,7 +716,7 @@ public:
     return getNumSymbols() - getNumAnonymousSymbols();
   }
   size_t getNumSymbols() const { return getNumReferences(); }
-  cas::CASID getSymbolID(size_t I) const { return getReference(I); }
+  cas::CASID getSymbolID(size_t I) const { return getReferenceID(I); }
 
   Expected<SymbolRef> getSymbol(size_t I) const {
     return SymbolRef::get(getSchema().getNode(getSymbolID(I)));
@@ -749,7 +749,7 @@ public:
   static constexpr StringLiteral KindString = "cas.o:name-list";
 
   size_t getNumNames() const { return getNumReferences(); }
-  cas::CASID getNameID(size_t I) const { return getReference(I); }
+  cas::CASID getNameID(size_t I) const { return getReferenceID(I); }
   Expected<NameRef> getName(size_t I) const {
     return NameRef::get(getSchema(), getNameID(I));
   }
@@ -916,13 +916,13 @@ public:
   unsigned getPointerSize() const { return PointerSize; }
   support::endianness getEndianness() const { return Endianness; }
 
-  cas::CASID getDeadStripNeverID() const { return getReference(1); }
-  cas::CASID getDeadStripLinkID() const { return getReference(2); }
-  cas::CASID getIndirectDeadStripCompileID() const { return getReference(3); }
-  cas::CASID getIndirectAnonymousID() const { return getReference(4); }
-  cas::CASID getStrongExternalsID() const { return getReference(5); }
-  cas::CASID getWeakExternalsID() const { return getReference(6); }
-  cas::CASID getUnreferencedID() const { return getReference(7); }
+  cas::CASID getDeadStripNeverID() const { return getReferenceID(1); }
+  cas::CASID getDeadStripLinkID() const { return getReferenceID(2); }
+  cas::CASID getIndirectDeadStripCompileID() const { return getReferenceID(3); }
+  cas::CASID getIndirectAnonymousID() const { return getReferenceID(4); }
+  cas::CASID getStrongExternalsID() const { return getReferenceID(5); }
+  cas::CASID getWeakExternalsID() const { return getReferenceID(6); }
+  cas::CASID getUnreferencedID() const { return getReferenceID(7); }
   Expected<SymbolTableRef> getDeadStripNever() const {
     return SymbolTableRef::get(getSchema().getNode(getDeadStripNeverID()));
   }

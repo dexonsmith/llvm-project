@@ -22,6 +22,8 @@ namespace cas {
 class CASID;
 
 /// Context for CAS identifiers.
+///
+/// FIXME: Rename to ObjectContext.
 class CASIDContext {
   virtual void anchor();
 
@@ -55,6 +57,8 @@ protected:
 /// compared directly. If they are, then \a
 /// CASIDContext::getHashSchemaIdentifier() is compared to see if they can be
 /// compared by hash, in which case the result of \a getHash() is compared.
+///
+/// FIXME: Rename to ObjectID (and rename file to CASObjectID.h?).
 class CASID {
 public:
   void dump() const;

@@ -9,6 +9,7 @@
 #include "BuiltinCAS.h"
 #include "llvm/ADT/LazyAtomicPointer.h"
 #include "llvm/ADT/PointerIntPair.h"
+#include "llvm/ADT/PointerUnion.h"
 #include "llvm/CAS/BuiltinObjectHasher.h"
 #include "llvm/CAS/HashMappedTrie.h"
 #include "llvm/CAS/ThreadSafeAllocator.h"
@@ -170,7 +171,10 @@ public:
     return O->getKind() == Kind::RefNode || O->getKind() == Kind::InlineNode;
   }
   inline ArrayRef<char> getData() const;
-  inline ArrayRef<const InMemoryObject *> getRefs() const;
+
+  using ReferenceUnionT =
+      PointerUnion<const InMemoryObject *, const InMemoryString *>;
+  inline ArrayRef<ReferenceUnionT> getRefs() const;
 
 private:
   using InMemoryObject::InMemoryObject;
@@ -183,29 +187,29 @@ public:
     return O->getKind() == KindValue;
   }
 
-  ArrayRef<const InMemoryObject *> getRefsImpl() const { return Refs; }
-  ArrayRef<const InMemoryObject *> getRefs() const { return Refs; }
+  ArrayRef<ReferenceUnionT> getRefsImpl() const { return Refs; }
+  ArrayRef<ReferenceUnionT> getRefs() const { return Refs; }
   ArrayRef<char> getDataImpl() const { return Data; }
   ArrayRef<char> getData() const { return Data; }
 
   static InMemoryRefNode &create(function_ref<void *(size_t Size)> Allocate,
                                  const InMemoryIndexValueT &I,
-                                 ArrayRef<const InMemoryObject *> Refs,
+                                 ArrayRef<ReferenceUnionT> Refs,
                                  ArrayRef<char> Data) {
     void *Mem = Allocate(sizeof(InMemoryRefNode));
     return *new (Mem) InMemoryRefNode(I, Refs, Data);
   }
 
 private:
-  InMemoryRefNode(const InMemoryIndexValueT &I,
-                  ArrayRef<const InMemoryObject *> Refs, ArrayRef<char> Data)
+  InMemoryRefNode(const InMemoryIndexValueT &I, ArrayRef<ReferenceUnionT> Refs,
+                  ArrayRef<char> Data)
       : InMemoryNode(KindValue, I), Refs(Refs), Data(Data) {
     assert(isAddrAligned(Align(8), this) && "Expected 8-byte alignment");
     assert(isAddrAligned(Align(8), Data.data()) && "Expected 8-byte alignment");
     assert(*Data.end() == 0 && "Expected null-termination");
   }
 
-  ArrayRef<const InMemoryObject *> Refs;
+  ArrayRef<ReferenceUnionT> Refs;
   ArrayRef<char> Data;
 };
 
@@ -216,22 +220,22 @@ public:
     return O->getKind() == KindValue;
   }
 
-  ArrayRef<const InMemoryObject *> getRefs() const { return getRefsImpl(); }
-  ArrayRef<const InMemoryObject *> getRefsImpl() const {
-    return makeArrayRef(
-        reinterpret_cast<const InMemoryObject *const *>(this + 1), NumRefs);
+  ArrayRef<ReferenceUnionT> getRefs() const { return getRefsImpl(); }
+  ArrayRef<ReferenceUnionT> getRefsImpl() const {
+    return makeArrayRef(reinterpret_cast<const ReferenceUnionT *>(this + 1),
+                        NumRefs);
   }
 
   ArrayRef<char> getData() const { return getDataImpl(); }
   ArrayRef<char> getDataImpl() const {
-    ArrayRef<const InMemoryObject *> Refs = getRefs();
+    ArrayRef<ReferenceUnionT> Refs = getRefs();
     return makeArrayRef(
         reinterpret_cast<const char *>(Refs.data() + Refs.size()), DataSize);
   }
 
   static InMemoryInlineNode &create(function_ref<void *(size_t Size)> Allocate,
                                     const InMemoryIndexValueT &I,
-                                    ArrayRef<const InMemoryObject *> Refs,
+                                    ArrayRef<ReferenceUnionT> Refs,
                                     ArrayRef<char> Data) {
     void *Mem = Allocate(sizeof(InMemoryInlineNode) +
                          sizeof(uintptr_t) * Refs.size() + Data.size() + 1);
@@ -240,10 +244,10 @@ public:
 
 private:
   InMemoryInlineNode(const InMemoryIndexValueT &I,
-                     ArrayRef<const InMemoryObject *> Refs, ArrayRef<char> Data)
+                     ArrayRef<ReferenceUnionT> Refs, ArrayRef<char> Data)
       : InMemoryNode(KindValue, I), NumRefs(Refs.size()),
         DataSize(Data.size()) {
-    auto *BeginRefs = reinterpret_cast<const InMemoryObject **>(this + 1);
+    auto *BeginRefs = reinterpret_cast<ReferenceUnionT *>(this + 1);
     llvm::copy(Refs, BeginRefs);
     auto *BeginData = reinterpret_cast<char *>(BeginRefs + NumRefs);
     llvm::copy(Data, BeginData);
@@ -282,7 +286,7 @@ public:
                         Size);
   }
 
-  Optional<NamedEntry> find(StringRef Name) const;
+  const NamedRef *find(StringRef Name) const;
 
   bool empty() const { return !Size; }
   size_t size() const { return Size; }
@@ -332,19 +336,19 @@ public:
     return getID(indexHash(Hash));
   }
 
-  Expected<BlobProxy> createBlobImpl(ArrayRef<uint8_t> ComputedHash,
+  Expected<BlobHandle> storeBlobImpl(ArrayRef<uint8_t> ComputedHash,
                                      ArrayRef<char> Data) final;
-  Expected<TreeProxy>
-  createTreeImpl(ArrayRef<uint8_t> ComputedHash,
-                 ArrayRef<NamedTreeEntry> SortedEntries) final;
-  Expected<NodeProxy> createNodeImpl(ArrayRef<uint8_t> ComputedHash,
-                                     ArrayRef<CASID> References,
+  Expected<TreeHandle>
+  storeTreeImpl(ArrayRef<uint8_t> ComputedHash,
+                ArrayRef<NamedTreeEntry> SortedEntries) final;
+  Expected<NodeHandle> storeNodeImpl(ArrayRef<uint8_t> ComputedHash,
+                                     ArrayRef<Reference> Refs,
                                      ArrayRef<char> Data) final;
-  Optional<ObjectKind> getObjectKind(CASID ID) final;
+  ReferenceKind getReferenceKind(Reference Ref) const final;
 
-  Expected<BlobProxy>
-  createBlobFromNullTerminatedRegion(ArrayRef<uint8_t> ComputedHash,
-                                     sys::fs::mapped_file_region Map) override;
+  Expected<BlobHandle>
+  storeBlobFromNullTerminatedRegion(ArrayRef<uint8_t> ComputedHash,
+                                    sys::fs::mapped_file_region Map) override;
 
   CASID getID(const InMemoryIndexValueT &I) const {
     return CASID::getFromInternalID(*this, reinterpret_cast<uintptr_t>(&I));
@@ -364,23 +368,45 @@ public:
     return extractIndexFromID(ID).Hash;
   }
 
-  Expected<BlobProxy> getBlobProxy(const InMemoryObject &Object) {
-    if (auto *Blob = dyn_cast<InMemoryBlob>(&Object))
-      return makeBlobProxy(getID(Object), Blob->getDataString());
-    return createInvalidObjectError(getID(Object), ObjectKind::Blob);
+  AnyObjectHandle getObjectHandle(const InMemoryObject &O) const {
+    if (auto *B = dyn_cast<InMemoryBlob>(&O))
+      return getBlobHandle(*B);
+    if (auto *T = dyn_cast<InMemoryTree>(&O))
+      return getTreeHandle(*T);
+    return getNodeHandle(cast<InMemoryNode>(O));
   }
 
-  Expected<NodeProxy> getNodeProxy(const InMemoryObject &Object) {
-    if (auto *Node = dyn_cast<InMemoryNode>(&Object))
-      return makeNodeProxy(getID(Object), Node, Node->getRefs().size(),
-                           Node->getDataString());
-    return createInvalidObjectError(getID(Object), ObjectKind::Node);
+  RawDataHandle getStringHandle(const InMemoryString &S) const {
+    assert(!(reinterpret_cast<uintptr_t>(&S) & 0x1ULL));
+    return makeRawDataHandle(reinterpret_cast<uintptr_t>(&S) | 0x1ULL);
   }
 
-  Expected<TreeProxy> getTreeProxy(const InMemoryObject &Object) {
-    if (auto *Tree = dyn_cast<InMemoryTree>(&Object))
-      return makeTreeProxy(getID(Object), Tree, Tree->size());
-    return createInvalidObjectError(getID(Object), ObjectKind::Tree);
+  BlobHandle getBlobHandle(const InMemoryBlob &Blob) const {
+    assert(!(reinterpret_cast<uintptr_t>(&Blob) & 0x1ULL));
+    return makeBlobHandle(reinterpret_cast<uintptr_t>(&Blob));
+  }
+  TreeHandle getTreeHandle(const InMemoryTree &Tree) const {
+    assert(!(reinterpret_cast<uintptr_t>(&Tree) & 0x1ULL));
+    return makeTreeHandle(reinterpret_cast<uintptr_t>(&Tree));
+  }
+  NodeHandle getNodeHandle(const InMemoryNode &Node) const {
+    assert(!(reinterpret_cast<uintptr_t>(&Node) & 0x1ULL));
+    return makeNodeHandle(reinterpret_cast<uintptr_t>(&Node));
+  }
+
+  Optional<RawDataHandle> getRawData(Reference Ref) const override {
+    if (const InMemoryString *S = asInMemoryString(Ref))
+      return getStringHandle(*S);
+    return None;
+  }
+
+  Expected<AnyHandle> load(Reference Ref) override {
+    if (Optional<RawDataHandle> Data = getRawData(Ref))
+      return *Data;
+
+    const InMemoryObject *O = asInMemoryObject(Ref);
+    assert(O && "Expected string or object");
+    return getObjectHandle(*O);
   }
 
   InMemoryIndexValueT &indexHash(ArrayRef<uint8_t> Hash) {
@@ -390,7 +416,7 @@ public:
 
   /// TODO: Consider callers to actually do an insert and to return a handle to
   /// the slot in the trie.
-  const InMemoryObject *getObject(CASID ID) const {
+  const InMemoryObject *getInMemoryObject(CASID ID) const {
     if (&ID.getContext() == this)
       return extractIndexFromID(ID).Data;
     assert(ID.getContext().getHashSchemaIdentifier() ==
@@ -401,22 +427,59 @@ public:
     return nullptr;
   }
 
+  const InMemoryObject &getInMemoryObject(ObjectHandle OH) const {
+    return *reinterpret_cast<const InMemoryObject *>(
+        (uintptr_t)OH.getInternalRef(*this));
+  }
+
+  const InMemoryObject *asInMemoryObject(Reference Ref) const {
+    uintptr_t P = Ref.getInternalRef(*this);
+    return P & 0x1ULL ? nullptr : reinterpret_cast<const InMemoryObject *>(P);
+  }
+  const InMemoryString *asInMemoryString(Reference Ref) const {
+    uintptr_t P = Ref.getInternalRef(*this);
+    uintptr_t SP = P & (uintptr_t)(-1ULL << 1);
+    return P & 0x1ULL ? reinterpret_cast<const InMemoryString *>(SP) : nullptr;
+  }
+  Reference toReference(InMemoryNode::ReferenceUnionT Ref) const {
+    assert(!Ref.isNull());
+    if (const InMemoryObject *O = Ref.dyn_cast<const InMemoryObject *>())
+      return getObjectHandle(*O);
+    return getStringHandle(*Ref.get<const InMemoryString *>());
+  }
+  InMemoryNode::ReferenceUnionT toReferenceUnion(Reference Ref) const {
+    if (const InMemoryObject *O = asInMemoryObject(Ref))
+      return O;
+    const InMemoryString *S = asInMemoryString(Ref);
+    assert(S);
+    return S;
+  }
+
+  const InMemoryBlob &getInMemoryBlob(BlobHandle Blob) const {
+    return cast<InMemoryBlob>(getInMemoryObject(Blob));
+  }
+  const InMemoryNode &getInMemoryNode(NodeHandle Node) const {
+    return cast<InMemoryNode>(getInMemoryObject(Node));
+  }
+  const InMemoryTree &getInMemoryTree(TreeHandle Tree) const {
+    return cast<InMemoryTree>(getInMemoryObject(Tree));
+  }
+
+  Optional<CASID> getObjectIDImpl(Reference Ref) const final {
+    if (const InMemoryObject *O = asInMemoryObject(Ref))
+      return getID(*O);
+    return None;
+  }
+
   const InMemoryString &getOrCreateString(StringRef String);
-  Expected<BlobProxy> getBlob(CASID ID) final {
-    if (const InMemoryObject *Object = getObject(ID))
-      return getBlobProxy(*Object);
-    return createInvalidObjectError(ID, ObjectKind::Blob);
+  Optional<Reference> getReference(const CASID &ID) final {
+    if (const InMemoryObject *Object = getInMemoryObject(ID))
+      return getObjectHandle(*Object);
+    return None;
   }
-  Expected<NodeProxy> getNode(CASID ID) final {
-    if (const InMemoryObject *Object = getObject(ID))
-      return getNodeProxy(*Object);
-    return createInvalidObjectError(ID, ObjectKind::Node);
-  }
-  Expected<TreeProxy> getTree(CASID ID) final {
-    if (const InMemoryObject *Object = getObject(ID))
-      return getTreeProxy(*Object);
-    return createInvalidObjectError(ID, ObjectKind::Tree);
-  }
+
+  ArrayRef<char> getDataConst(AnyDataHandle Data) const final;
+
   void print(raw_ostream &OS) const final;
 
   Expected<CASID> getCachedResult(CASID InputID) final;
@@ -429,17 +492,26 @@ private:
   NamedTreeEntry makeTreeEntry(const InMemoryTree::NamedEntry &Entry) const {
     return NamedTreeEntry(getID(*Entry.Ref), Entry.Kind, Entry.Name->get());
   }
-  Optional<NamedTreeEntry> lookupInTree(const TreeProxy &Handle,
-                                        StringRef Name) const final;
-  NamedTreeEntry getInTree(const TreeProxy &Handle, size_t I) const final;
-  Error forEachEntryInTree(
-      const TreeProxy &Tree,
+  NamedTreeEntry loadTreeEntry(TreeHandle Tree, size_t I) const final {
+    return makeTreeEntry(getInMemoryTree(Tree)[I]);
+  }
+  size_t getNumTreeEntries(TreeHandle Tree) const final {
+    return getInMemoryTree(Tree).size();
+  }
+  Optional<size_t> lookupTreeEntry(TreeHandle Tree, StringRef Name) const final;
+  Error forEachTreeEntry(
+      TreeHandle Tree,
       function_ref<Error(const NamedTreeEntry &)> Callback) const final;
 
   // NodeAPI.
-  CASID getReferenceInNode(const NodeProxy &Handle, size_t I) const final;
-  Error forEachReferenceInNode(const NodeProxy &Handle,
-                               function_ref<Error(CASID)> Callback) const final;
+  size_t getNumRefs(NodeHandle Node) const final {
+    return getInMemoryNode(Node).getRefs().size();
+  }
+  Reference readRef(NodeHandle Node, size_t I) const final {
+    return toReference(getInMemoryNode(Node).getRefs()[I]);
+  }
+  Error forEachRef(NodeHandle Node,
+                   function_ref<Error(Reference)> Callback) const final;
 
   /// Index of referenced IDs (map: Hash -> InMemoryObject*). Mapped to nullptr
   /// as a convenient way to store hashes.
@@ -462,22 +534,10 @@ private:
 
 } // end anonymous namespace
 
-Optional<ObjectKind> InMemoryCAS::getObjectKind(CASID ID) {
-  const InMemoryObject *Object = getObject(ID);
-  if (!Object)
-    return None;
-  switch (Object->getKind()) {
-  case InMemoryObject::Kind::RefNode:
-  case InMemoryObject::Kind::InlineNode:
-    return ObjectKind::Node;
-
-  case InMemoryObject::Kind::RefBlob:
-  case InMemoryObject::Kind::InlineBlob:
-    return ObjectKind::Blob;
-
-  case InMemoryObject::Kind::Tree:
-    return ObjectKind::Tree;
-  }
+ReferenceKind InMemoryCAS::getReferenceKind(Reference Ref) const {
+  if (asInMemoryObject(Ref))
+    return ReferenceKind::Object;
+  return ReferenceKind::RawData;
 }
 
 ArrayRef<char> InMemoryBlob::getData() const {
@@ -492,7 +552,7 @@ ArrayRef<char> InMemoryNode::getData() const {
   return cast<InMemoryInlineNode>(this)->getDataImpl();
 }
 
-ArrayRef<const InMemoryObject *> InMemoryNode::getRefs() const {
+ArrayRef<InMemoryNode::ReferenceUnionT> InMemoryNode::getRefs() const {
   if (auto *Derived = dyn_cast<InMemoryRefNode>(this))
     return Derived->getRefsImpl();
   return cast<InMemoryInlineNode>(this)->getRefsImpl();
@@ -502,7 +562,7 @@ void InMemoryCAS::print(raw_ostream &OS) const {
   OS << "index: ";
   Index.print(OS);
   OS << "strings: ";
-  Index.print(OS);
+  StringPool.print(OS);
   OS << "action-cache: ";
   ActionCache.print(OS);
 }
@@ -535,7 +595,7 @@ InMemoryTree::InMemoryTree(const InMemoryIndexValueT &I,
     new (Entry++) TreeEntry::EntryKind(E.Kind);
 }
 
-Optional<InMemoryTree::NamedEntry> InMemoryTree::find(StringRef Name) const {
+const InMemoryTree::NamedRef *InMemoryTree::find(StringRef Name) const {
   auto Compare = [](const NamedRef &LHS, StringRef RHS) {
     return LHS.Name->get().compare(RHS) < 0;
   };
@@ -543,11 +603,11 @@ Optional<InMemoryTree::NamedEntry> InMemoryTree::find(StringRef Name) const {
   ArrayRef<NamedRef> Refs = getNamedRefs();
   const NamedRef *I = std::lower_bound(Refs.begin(), Refs.end(), Name, Compare);
   if (I == Refs.end() || I->Name->get() != Name)
-    return None;
-  return operator[](I - Refs.begin());
+    return nullptr;
+  return I;
 }
 
-Expected<BlobProxy> InMemoryCAS::createBlobImpl(ArrayRef<uint8_t> ComputedHash,
+Expected<BlobHandle> InMemoryCAS::storeBlobImpl(ArrayRef<uint8_t> ComputedHash,
                                                 ArrayRef<char> Data) {
   // Look up the hash in the index, initializing to nullptr if it's new.
   auto &I = indexHash(ComputedHash);
@@ -560,10 +620,10 @@ Expected<BlobProxy> InMemoryCAS::createBlobImpl(ArrayRef<uint8_t> ComputedHash,
     return &InMemoryInlineBlob::create(Allocator, I, Data);
   };
 
-  return getBlobProxy(I.Data.loadOrGenerate(Generator));
+  return getBlobHandle(cast<InMemoryBlob>(I.Data.loadOrGenerate(Generator)));
 }
 
-Expected<BlobProxy> InMemoryCAS::createBlobFromNullTerminatedRegion(
+Expected<BlobHandle> InMemoryCAS::storeBlobFromNullTerminatedRegion(
     ArrayRef<uint8_t> ComputedHash, sys::fs::mapped_file_region Map) {
   // Look up the hash in the index, initializing to nullptr if it's new.
   ArrayRef<char> Data(Map.data(), Map.size());
@@ -576,39 +636,34 @@ Expected<BlobProxy> InMemoryCAS::createBlobFromNullTerminatedRegion(
   auto Generator = [&]() -> const InMemoryObject * {
     return &InMemoryRefBlob::create(Allocator, I, Data);
   };
-  const InMemoryObject &Object = I.Data.loadOrGenerate(Generator);
+  const InMemoryBlob &Blob =
+      cast<InMemoryBlob>(I.Data.loadOrGenerate(Generator));
 
   // Save Map if the winning blob uses it.
-  if (auto *Blob = dyn_cast<InMemoryRefBlob>(&Object))
-    if (Blob->getData().data() == Map.data())
+  if (auto *RefBlob = dyn_cast<InMemoryRefBlob>(&Blob))
+    if (RefBlob->getData().data() == Map.data())
       new (MemoryMaps.Allocate()) sys::fs::mapped_file_region(std::move(Map));
 
-  return getBlobProxy(Object);
+  return getBlobHandle(Blob);
 }
 
-Expected<NodeProxy> InMemoryCAS::createNodeImpl(ArrayRef<uint8_t> ComputedHash,
-                                                ArrayRef<CASID> Refs,
+Expected<NodeHandle> InMemoryCAS::storeNodeImpl(ArrayRef<uint8_t> ComputedHash,
+                                                ArrayRef<Reference> Refs,
                                                 ArrayRef<char> Data) {
   // Look up the hash in the index, initializing to nullptr if it's new.
   auto &I = indexHash(ComputedHash);
-  if (const InMemoryObject *Node = I.Data.load())
-    return getNodeProxy(*Node);
 
   // Create the node.
-  SmallVector<const InMemoryObject *> InternalRefs;
-  for (CASID ID : Refs) {
-    if (const InMemoryObject *Object = getObject(ID))
-      InternalRefs.push_back(Object);
-    else
-      return createInvalidObjectError(ID, ObjectKind::Node);
-  }
+  SmallVector<InMemoryNode::ReferenceUnionT> InternalRefs;
+  for (Reference Ref : Refs)
+    InternalRefs.push_back(toReferenceUnion(Ref));
   auto Allocator = [&](size_t Size) -> void * {
     return Objects.Allocate(Size, alignof(InMemoryObject));
   };
   auto Generator = [&]() -> const InMemoryObject * {
     return &InMemoryInlineNode::create(Allocator, I, InternalRefs, Data);
   };
-  return getNodeProxy(I.Data.loadOrGenerate(Generator));
+  return getNodeHandle(cast<InMemoryNode>(I.Data.loadOrGenerate(Generator)));
 }
 
 const InMemoryString &InMemoryCAS::getOrCreateString(StringRef String) {
@@ -625,19 +680,19 @@ const InMemoryString &InMemoryCAS::getOrCreateString(StringRef String) {
   return S.Data.loadOrGenerate(Generator);
 }
 
-Expected<TreeProxy>
-InMemoryCAS::createTreeImpl(ArrayRef<uint8_t> ComputedHash,
-                            ArrayRef<NamedTreeEntry> SortedEntries) {
+Expected<TreeHandle>
+InMemoryCAS::storeTreeImpl(ArrayRef<uint8_t> ComputedHash,
+                           ArrayRef<NamedTreeEntry> SortedEntries) {
   // Look up the hash in the index, initializing to nullptr if it's new.
   auto &I = indexHash(ComputedHash);
   if (const InMemoryObject *Tree = I.Data.load())
-    return getTreeProxy(*Tree);
+    return getTreeHandle(cast<InMemoryTree>(*Tree));
 
   // Create the tree.
   SmallVector<InMemoryTree::NamedEntry> InternalEntries;
   for (const NamedTreeEntry &E : SortedEntries) {
-    InternalEntries.push_back(
-        {getObject(E.getID()), &getOrCreateString(E.getName()), E.getKind()});
+    InternalEntries.push_back({getInMemoryObject(E.getID()),
+                               &getOrCreateString(E.getName()), E.getKind()});
     if (!InternalEntries.back().Ref)
       return createUnknownObjectError(E.getID());
   }
@@ -647,7 +702,7 @@ InMemoryCAS::createTreeImpl(ArrayRef<uint8_t> ComputedHash,
   auto Generator = [&]() -> const InMemoryObject * {
     return &InMemoryTree::create(Allocator, I, InternalEntries);
   };
-  return getTreeProxy(I.Data.loadOrGenerate(Generator));
+  return getTreeHandle(cast<InMemoryTree>(I.Data.loadOrGenerate(Generator)));
 }
 
 Expected<CASID> InMemoryCAS::getCachedResult(CASID InputID) {
@@ -678,43 +733,41 @@ Error InMemoryCAS::putCachedResult(CASID InputID, CASID OutputID) {
   return createResultCachePoisonedError(InputID, OutputID, getID(Observed));
 }
 
-Optional<NamedTreeEntry> InMemoryCAS::lookupInTree(const TreeProxy &Handle,
-                                                   StringRef Name) const {
-  auto &Tree = *reinterpret_cast<const InMemoryTree *>(getTreePtr(Handle));
-  if (Optional<InMemoryTree::NamedEntry> E = Tree.find(Name))
-    return makeTreeEntry(*E);
+Optional<size_t> InMemoryCAS::lookupTreeEntry(TreeHandle Handle,
+                                              StringRef Name) const {
+  const auto &Tree = getInMemoryTree(Handle);
+  if (const InMemoryTree::NamedRef *Ref = Tree.find(Name))
+    return Ref - Tree.getNamedRefs().begin();
   return None;
 }
 
-NamedTreeEntry InMemoryCAS::getInTree(const TreeProxy &Handle, size_t I) const {
-  auto &Tree = *reinterpret_cast<const InMemoryTree *>(getTreePtr(Handle));
-  assert(I < Tree.size() && "Invalid index");
-  return makeTreeEntry(Tree[I]);
-}
-
-Error InMemoryCAS::forEachEntryInTree(
-    const TreeProxy &Handle,
+Error InMemoryCAS::forEachTreeEntry(
+    TreeHandle Handle,
     function_ref<Error(const NamedTreeEntry &)> Callback) const {
-  auto &Tree = *reinterpret_cast<const InMemoryTree *>(getTreePtr(Handle));
+  auto &Tree = getInMemoryTree(Handle);
   for (size_t I = 0, E = Tree.size(); I != E; ++I)
     if (Error E = Callback(makeTreeEntry(Tree[I])))
       return E;
   return Error::success();
 }
 
-CASID InMemoryCAS::getReferenceInNode(const NodeProxy &Handle, size_t I) const {
-  auto &Node = *reinterpret_cast<const InMemoryNode *>(getNodePtr(Handle));
-  assert(I < Node.getRefs().size() && "Invalid index");
-  return getID(*Node.getRefs()[I]);
-}
-
-Error InMemoryCAS::forEachReferenceInNode(
-    const NodeProxy &Handle, function_ref<Error(CASID)> Callback) const {
-  auto &Node = *reinterpret_cast<const InMemoryNode *>(getNodePtr(Handle));
-  for (const InMemoryObject *Object : Node.getRefs())
-    if (Error E = Callback(getID(*Object)))
+Error InMemoryCAS::forEachRef(NodeHandle Handle,
+                              function_ref<Error(Reference)> Callback) const {
+  auto &Node = getInMemoryNode(Handle);
+  for (InMemoryNode::ReferenceUnionT Ref : Node.getRefs())
+    if (Error E = Callback(toReference(Ref)))
       return E;
   return Error::success();
+}
+
+ArrayRef<char> InMemoryCAS::getDataConst(AnyDataHandle Data) const {
+  if (auto *S = asInMemoryString(Data))
+    return toArrayRef(S->get());
+  const InMemoryObject *Object = asInMemoryObject(Data);
+  assert(Object);
+  if (auto *B = dyn_cast<InMemoryBlob>(Object))
+    return B->getData();
+  return cast<InMemoryNode>(Object)->getData();
 }
 
 std::unique_ptr<CASDB> cas::createInMemoryCAS() {

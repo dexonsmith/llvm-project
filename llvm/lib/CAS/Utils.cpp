@@ -13,6 +13,7 @@
 // headers of libLLVMCASObjectFormats) but 'Encoding.h' itself should really
 // move to libLLVMSupport.
 #include "llvm/CASObjectFormats/Encoding.h"
+#include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/StringSaver.h"
 

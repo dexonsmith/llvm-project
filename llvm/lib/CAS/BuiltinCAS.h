@@ -94,16 +94,10 @@ moveValueInto(Expected<Optional<T>> ExpectedOptional, SinkT &Sink) {
   return None;
 }
 
-/// FIXME: Should we switch to using ArrayRef<uint8_t>, or move this
-/// to StringExtras.h as an overload of the 'uint8_t' version?
-inline StringRef toStringRef(ArrayRef<char> Data) {
-  return StringRef(Data.data(), Data.size());
-}
-
 /// FIXME: Should we switch to using ArrayRef<uint8_t>, or add a new
 /// name to arrayRefFromStringRef that works with 'char'?
 inline ArrayRef<char> toArrayRef(StringRef Data) {
-  return ArrayRef<char>(Data.data(), Data.size());
+  return arrayRefFromStringRef<char>(Data);
 }
 
 /// Current hash type for the internal CAS.
@@ -161,56 +155,67 @@ public:
   static StringRef getHashName() { return "BLAKE3"; }
   StringRef getHashSchemaIdentifier() const final {
     static const std::string ID =
-        ("llvm.cas.builtin.v1[" + getHashName() + "]").str();
+        ("llvm.cas.builtin.v2[" + getHashName() + "]").str();
     return ID;
   }
 
   Expected<CASID> parseID(StringRef Reference) final;
 
-  bool isKnownObject(CASID ID) final { return bool(getObjectKind(ID)); }
-
   virtual Expected<CASID> parseIDImpl(ArrayRef<uint8_t> Hash) = 0;
 
-  Expected<TreeProxy> createTree(ArrayRef<NamedTreeEntry> Entries) final;
-  virtual Expected<TreeProxy>
-  createTreeImpl(ArrayRef<uint8_t> ComputedHash,
-                 ArrayRef<NamedTreeEntry> SortedEntries) = 0;
+  Expected<TreeHandle> storeTree(ArrayRef<NamedTreeEntry> Entries) final;
+  virtual Expected<TreeHandle>
+  storeTreeImpl(ArrayRef<uint8_t> ComputedHash,
+                ArrayRef<NamedTreeEntry> SortedEntries) = 0;
 
-  Expected<NodeProxy> createNode(ArrayRef<CASID> References,
-                                 StringRef Data) final {
-    return createNode(References, toArrayRef(Data));
-  }
-  Expected<NodeProxy> createNode(ArrayRef<CASID> References,
-                                 ArrayRef<char> Data);
-  virtual Expected<NodeProxy> createNodeImpl(ArrayRef<uint8_t> ComputedHash,
-                                             ArrayRef<CASID> References,
+  Expected<NodeHandle> storeNode(ArrayRef<Reference> Refs,
+                                 ArrayRef<char> Data) final;
+  virtual Expected<NodeHandle> storeNodeImpl(ArrayRef<uint8_t> ComputedHash,
+                                             ArrayRef<Reference> Refs,
                                              ArrayRef<char> Data) = 0;
 
-  Expected<BlobProxy>
-  createBlobFromOpenFileImpl(sys::fs::file_t FD,
-                             Optional<sys::fs::file_status> Status) override;
-  virtual Expected<BlobProxy>
-  createBlobFromNullTerminatedRegion(ArrayRef<uint8_t> ComputedHash,
-                                     sys::fs::mapped_file_region Map) {
-    return createBlobImpl(ComputedHash, makeArrayRef(Map.data(), Map.size()));
+  Expected<BlobHandle>
+  storeBlobFromOpenFileImpl(sys::fs::file_t FD,
+                            Optional<sys::fs::file_status> Status) override;
+  virtual Expected<BlobHandle>
+  storeBlobFromNullTerminatedRegion(ArrayRef<uint8_t> ComputedHash,
+                                    sys::fs::mapped_file_region Map) {
+    return storeBlobImpl(ComputedHash, makeArrayRef(Map.data(), Map.size()));
   }
 
-  Expected<BlobProxy> createBlob(StringRef Data) final {
-    return createBlob(makeArrayRef(Data.data(), Data.size()));
+  Expected<BlobHandle> storeBlob(StringRef Data) final {
+    return storeBlob(makeArrayRef(Data.data(), Data.size()));
   }
-  Expected<BlobProxy> createBlob(ArrayRef<char> Data);
-  virtual Expected<BlobProxy> createBlobImpl(ArrayRef<uint8_t> ComputedHash,
+  Expected<BlobHandle> storeBlob(ArrayRef<char> Data);
+  virtual Expected<BlobHandle> storeBlobImpl(ArrayRef<uint8_t> ComputedHash,
                                              ArrayRef<char> Data) = 0;
 
-  static StringRef getKindName(ObjectKind Kind) {
-    switch (Kind) {
-    case ObjectKind::Blob:
-      return "blob";
-    case ObjectKind::Node:
-      return "node";
-    case ObjectKind::Tree:
-      return "tree";
-    }
+  /// Both builtin CAS implementations provide lifetime for free, so this can
+  /// be const, and readData() and getDataSize() can be implemented on top of
+  /// it.
+  virtual ArrayRef<char> getDataConst(AnyDataHandle Data) const = 0;
+
+  ArrayRef<char> getDataImpl(AnyDataHandle Data, bool NullTerminate) final {
+    return getDataConst(Data);
+  }
+  uint64_t getDataSize(AnyDataHandle Data) const final {
+    return getDataConst(Data).size();
+  }
+  uint64_t readDataImpl(AnyDataHandle Data, raw_ostream &OS, uint64_t Offset,
+                        uint64_t MaxBytes) const final;
+
+  static StringRef getKindName(ReferenceKind Kind) {
+    llvm_unreachable("reimplement");
+    // switch (Kind) {
+    // case ReferenceKind::Data:
+    //   return "data";
+    // case ReferenceKind::Node:
+    //   return "node";
+    // case ReferenceKind::Blob:
+    //   return "blob";
+    // case ReferenceKind::Tree:
+    //   return "tree";
+    // }
   }
 
   Error createUnknownObjectError(CASID ID) const {
@@ -223,7 +228,12 @@ public:
                              "corrupt object '" + ID.toString() + "'");
   }
 
-  Error createInvalidObjectError(CASID ID, ObjectKind Kind) const {
+  Error createCorruptStorageError() const {
+    return createStringError(std::make_error_code(std::errc::invalid_argument),
+                             "corrupt storage");
+  }
+
+  Error createInvalidObjectError(CASID ID, ReferenceKind Kind) const {
     return createStringError(std::make_error_code(std::errc::invalid_argument),
                              "invalid object '" + ID.toString() +
                                  "' for kind '" + getKindName(Kind) + "'");

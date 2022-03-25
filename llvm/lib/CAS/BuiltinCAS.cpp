@@ -46,8 +46,8 @@ void BuiltinCAS::printIDImpl(raw_ostream &OS, const CASID &ID) const {
   OS << getCASIDPrefix() << Hash;
 }
 
-Expected<BlobProxy> BuiltinCAS::createBlob(ArrayRef<char> Data) {
-  return createBlobImpl(BuiltinObjectHasher<HasherT>::hashBlob(Data), Data);
+Expected<BlobHandle> BuiltinCAS::storeBlob(ArrayRef<char> Data) {
+  return storeBlobImpl(BuiltinObjectHasher<HasherT>::hashBlob(Data), Data);
 }
 
 static size_t getPageSize() {
@@ -55,9 +55,9 @@ static size_t getPageSize() {
   return PageSize;
 }
 
-Expected<BlobProxy>
-BuiltinCAS::createBlobFromOpenFileImpl(sys::fs::file_t FD,
-                                       Optional<sys::fs::file_status> Status) {
+Expected<BlobHandle>
+BuiltinCAS::storeBlobFromOpenFileImpl(sys::fs::file_t FD,
+                                      Optional<sys::fs::file_status> Status) {
   int PageSize = getPageSize();
 
   if (!Status) {
@@ -67,11 +67,11 @@ BuiltinCAS::createBlobFromOpenFileImpl(sys::fs::file_t FD,
   }
 
   constexpr size_t MinMappedSize = 4 * 4096;
-  auto readWithStream = [&]() -> Expected<BlobProxy> {
+  auto readWithStream = [&]() -> Expected<BlobHandle> {
     SmallString<MinMappedSize * 2> Data;
     if (Error E = sys::fs::readNativeFileToEOF(FD, Data, MinMappedSize))
       return std::move(E);
-    return createBlob(makeArrayRef(Data.data(), Data.size()));
+    return storeBlob(makeArrayRef(Data.data(), Data.size()));
   };
 
   // Check whether we can trust the size from stat.
@@ -95,22 +95,30 @@ BuiltinCAS::createBlobFromOpenFileImpl(sys::fs::file_t FD,
   ArrayRef<char> Data(Map.data(), Map.size());
   HashType ComputedHash = BuiltinObjectHasher<HasherT>::hashBlob(Data);
   if (!isAligned(Align(PageSize), Data.size()) && Data.end()[0] == 0)
-    return createBlobFromNullTerminatedRegion(ComputedHash, std::move(Map));
-  return createBlobImpl(ComputedHash, Data);
+    return storeBlobFromNullTerminatedRegion(ComputedHash, std::move(Map));
+  return storeBlobImpl(ComputedHash, Data);
 }
 
-Expected<TreeProxy> BuiltinCAS::createTree(ArrayRef<NamedTreeEntry> Entries) {
+Expected<TreeHandle> BuiltinCAS::storeTree(ArrayRef<NamedTreeEntry> Entries) {
   // Ensure a stable order for tree entries and ignore name collisions.
   SmallVector<NamedTreeEntry> Sorted(Entries.begin(), Entries.end());
   std::stable_sort(Sorted.begin(), Sorted.end());
   Sorted.erase(std::unique(Sorted.begin(), Sorted.end()), Sorted.end());
 
-  return createTreeImpl(
-      BuiltinObjectHasher<HasherT>::hashTree(Sorted), Sorted);
+  return storeTreeImpl(BuiltinObjectHasher<HasherT>::hashTree(Sorted), Sorted);
 }
 
-Expected<NodeProxy> BuiltinCAS::createNode(ArrayRef<CASID> References,
+Expected<NodeHandle> BuiltinCAS::storeNode(ArrayRef<Reference> Refs,
                                            ArrayRef<char> Data) {
-  return createNodeImpl(BuiltinObjectHasher<HasherT>::hashNode(References, Data),
-                        References, Data);
+  return storeNodeImpl(
+      BuiltinObjectHasher<HasherT>::hashNode(*this, Refs, Data), Refs, Data);
+}
+
+uint64_t BuiltinCAS::readDataImpl(AnyDataHandle Handle, raw_ostream &OS,
+                                  uint64_t Offset, uint64_t MaxBytes) const {
+  ArrayRef<char> Data = getDataConst(Handle);
+  assert(Offset < Data.size() && "Expected valid offset");
+  Data = Data.drop_front(Offset).take_front(MaxBytes);
+  OS << toStringRef(Data);
+  return Data.size();
 }

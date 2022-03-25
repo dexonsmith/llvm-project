@@ -294,6 +294,96 @@ TEST_P(CASDBTest, Trees) {
   }
 }
 
+TEST_P(CASDBTest, LeafNodes) {
+  std::unique_ptr<CASDB> CAS1 = createCAS();
+  StringRef ContentStrings[] = {
+      "word",
+      "some longer text std::string's local memory",
+      R"(multiline text multiline text multiline text multiline text
+multiline text multiline text multiline text multiline text multiline text
+multiline text multiline text multiline text multiline text multiline text
+multiline text multiline text multiline text multiline text multiline text
+multiline text multiline text multiline text multiline text multiline text
+multiline text multiline text multiline text multiline text multiline text)",
+  };
+
+  SmallVector<NodeHandle> Nodes;
+  SmallVector<CASID> IDs;
+  for (StringRef Content : ContentStrings) {
+    // Use StringRef::str() to create a temporary std::string. This could cause
+    // problems if the CAS is storing references to the input string instead of
+    // copying it.
+    Optional<NodeHandle> Node;
+    ASSERT_THAT_ERROR(
+        CAS1->storeNode(None, arrayRefFromStringRef<char>(Content))
+            .moveInto(Node),
+        Succeeded());
+    Nodes.push_back(*Node);
+
+    // Check basic printing of IDs.
+    IDs.push_back(CAS1->getObjectID(*Node));
+    EXPECT_EQ(IDs.back().toString(), IDs.back().toString());
+    EXPECT_EQ(Nodes.front(), Nodes.front());
+    EXPECT_EQ(Nodes.back(), Nodes.back());
+    EXPECT_EQ(IDs.front(), IDs.front());
+    EXPECT_EQ(IDs.back(), IDs.back());
+    if (Nodes.size() <= 1)
+      continue;
+    EXPECT_NE(Nodes.front(), Nodes.back());
+    EXPECT_NE(IDs.front(), IDs.back());
+  }
+
+  // Check that the blobs give the same IDs later.
+  for (int I = 0, E = IDs.size(); I != E; ++I) {
+    Optional<NodeHandle> Node;
+    ASSERT_THAT_ERROR(
+        CAS1->storeNode(None, arrayRefFromStringRef<char>(ContentStrings[I]))
+            .moveInto(Node),
+        Succeeded());
+    EXPECT_EQ(IDs[I], CAS1->getObjectID(*Node));
+  }
+
+  // Check that the blobs can be retrieved multiple times.
+  for (int I = 0, E = IDs.size(); I != E; ++I) {
+    for (int J = 0, JE = 3; J != JE; ++J) {
+      Optional<AnyObjectHandle> Object;
+      ASSERT_THAT_ERROR(CAS1->loadObject(IDs[I]).moveInto(Object), Succeeded());
+      ASSERT_TRUE(Object);
+      Optional<NodeHandle> Node = Object->dyn_cast<NodeHandle>();
+      ASSERT_TRUE(Node);
+      EXPECT_EQ(ContentStrings[I], CAS1->getDataString(Node->getData()));
+    }
+  }
+
+  // Confirm these blobs don't exist in a fresh CAS instance.
+  std::unique_ptr<CASDB> CAS2 = createCAS();
+  for (int I = 0, E = IDs.size(); I != E; ++I) {
+    Optional<AnyObjectHandle> Object;
+    EXPECT_THAT_EXPECTED(CAS2->loadObject(IDs[I]), Succeeded());
+    EXPECT_FALSE(Object);
+  }
+
+  // Insert into the second CAS and confirm the IDs are stable. Getting them
+  // should work now.
+  for (int I = IDs.size(), E = 0; I != E; --I) {
+    auto &ID = IDs[I - 1];
+    auto &Content = ContentStrings[I - 1];
+    Optional<NodeHandle> Node;
+    ASSERT_THAT_ERROR(
+        CAS2->storeNode(None, arrayRefFromStringRef<char>(Content))
+            .moveInto(Node),
+        Succeeded());
+    EXPECT_EQ(ID, CAS2->getObjectID(*Node));
+
+    Optional<AnyObjectHandle> Object;
+    ASSERT_THAT_ERROR(CAS2->loadObject(ID).moveInto(Object), Succeeded());
+    ASSERT_TRUE(Object);
+    Node = Object->dyn_cast<NodeHandle>();
+    ASSERT_TRUE(Node);
+    EXPECT_EQ(Content, CAS2->getDataString(Node->getData()));
+  }
+}
+
 TEST_P(CASDBTest, NodesBig) {
   std::unique_ptr<CASDB> CAS = createCAS();
 

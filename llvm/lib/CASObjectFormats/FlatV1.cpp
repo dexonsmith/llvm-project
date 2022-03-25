@@ -122,7 +122,7 @@ ObjectFileSchema::getKindString(const cas::NodeProxy &Node) const {
 bool ObjectFileSchema::isRootNode(const cas::NodeProxy &Node) const {
   if (Node.getNumReferences() < 1)
     return false;
-  return Node.getReference(0) == *RootNodeTypeID;
+  return Node.getReferenceID(0) == *RootNodeTypeID;
 }
 
 bool ObjectFileSchema::isNode(const cas::NodeProxy &Node) const {
@@ -842,7 +842,7 @@ Expected<CompileUnitRef> CompileUnitRef::create(const ObjectFileSchema &Schema,
 }
 
 Error CompileUnitRef::materialize(FlatV1ObjectReader &Reader) const {
-  if (auto E = forEachReference([&](cas::CASID ID) {
+  if (auto E = forEachReferenceID([&](cas::CASID ID) {
         Reader.IDs.emplace_back(ID);
         return Error::success();
       }))

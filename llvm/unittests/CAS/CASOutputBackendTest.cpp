@@ -82,7 +82,7 @@ TEST(CASOutputBackendTest, createFiles) {
   auto Array = makeArrayRef(OutputDescriptions);
   ASSERT_EQ(Array.size() * 2, Root->getNumReferences());
   for (size_t I = 0, E = Array.size(); I != E; ++I) {
-    ASSERT_EQ(Array[I].Path.getID(), Root->getReference(I * 2));
-    ASSERT_EQ(Array[I].Content.getID(), Root->getReference(I * 2 + 1));
+    ASSERT_EQ(Array[I].Path, Root->getReference(I * 2));
+    ASSERT_EQ(Array[I].Content, Root->getReference(I * 2 + 1));
   }
 }

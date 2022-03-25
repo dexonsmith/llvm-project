@@ -510,8 +510,8 @@ Optional<int> CompileJobCache::replayCachedResult(llvm::cas::CASID ResultID,
     llvm::report_fatal_error("CAS error accessing outputs");
 
   for (size_t I = 0, E = Outputs->getNumReferences(); I + 1 < E; I += 2) {
-    llvm::cas::CASID PathID = Outputs->getReference(I);
-    llvm::cas::CASID BytesID = Outputs->getReference(I + 1);
+    llvm::cas::CASID PathID = Outputs->getReferenceID(I);
+    llvm::cas::CASID BytesID = Outputs->getReferenceID(I + 1);
 
     Optional<llvm::cas::BlobProxy> Path;
     if (Error E = CAS->getBlob(PathID).moveInto(Path))

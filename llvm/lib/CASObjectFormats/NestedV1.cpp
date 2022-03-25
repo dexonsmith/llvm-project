@@ -291,7 +291,7 @@ ObjectFileSchema::getKindString(const cas::NodeProxy &Node) const {
 bool ObjectFileSchema::isRootNode(const cas::NodeProxy &Node) const {
   if (Node.getNumReferences() < 1)
     return false;
-  return Node.getReference(0) == *RootNodeTypeID;
+  return Node.getReferenceID(0) == *RootNodeTypeID;
 }
 
 bool ObjectFileSchema::isNode(const cas::NodeProxy &Node) const {
@@ -628,7 +628,7 @@ Optional<size_t> BlockRef::getTargetsIndex() const {
 Optional<cas::CASID> BlockRef::getTargetInfoID() const {
   assert(Flags.HasEdges && "Expected edges");
   assert(!Flags.HasEmbeddedTargetInfo && "Expected explicit edges");
-  return getReference(2U + unsigned(Flags.HasTargets));
+  return getReferenceID(2U + unsigned(Flags.HasTargets));
 }
 
 Expected<FixupList> BlockRef::getFixups() const {
@@ -666,7 +666,7 @@ Expected<TargetList> BlockRef::getTargets() const {
   if (Flags.HasTargetInline)
     return TargetList(*this, *TargetsIndex, *TargetsIndex + 1);
   if (Expected<TargetListRef> Targets =
-          TargetListRef::get(getSchema(), getReference(*TargetsIndex)))
+          TargetListRef::get(getSchema(), getReferenceID(*TargetsIndex)))
     return Targets->getTargets();
   else
     return Targets.takeError();

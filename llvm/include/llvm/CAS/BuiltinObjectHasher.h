@@ -24,6 +24,11 @@ enum class StableObjectKind : uint8_t {
   String = 4,
 };
 
+enum class StableReferenceKind : uint8_t {
+  Object = 1,
+  Data = 2,
+};
+
 enum class StableTreeEntryKind : uint8_t {
   Tree = 1,
   Regular = 2,
@@ -57,17 +62,6 @@ inline TreeEntry::EntryKind getUnstableKind(StableTreeEntryKind Kind) {
   }
 }
 
-inline StableObjectKind getStableKind(ObjectKind Kind) {
-  switch (Kind) {
-  case ObjectKind::Blob:
-    return StableObjectKind::Blob;
-  case ObjectKind::Node:
-    return StableObjectKind::Node;
-  case ObjectKind::Tree:
-    return StableObjectKind::Tree;
-  }
-}
-
 template <class HasherT> class BuiltinObjectHasher {
 public:
   using HashT = decltype(HasherT::hash(std::declval<ArrayRef<uint8_t> &>()));
@@ -91,19 +85,20 @@ public:
     H.start(StableObjectKind::Tree);
     H.updateSize(Entries.size());
     for (const NamedTreeEntry &Entry : Entries) {
-      H.updateObjectRef(Entry.getID());
+      H.updateID(Entry.getID());
       H.updateString(Entry.getName());
       H.updateKind(getStableKind(Entry.getKind()));
     }
     return H.finish();
   }
 
-  static HashT hashNode(ArrayRef<CASID> Refs, ArrayRef<char> Data) {
+  static HashT hashNode(const CASDB &CAS, ArrayRef<Reference> Refs,
+                        ArrayRef<char> Data) {
     BuiltinObjectHasher H;
     H.start(StableObjectKind::Node);
     H.updateSize(Refs.size());
-    for (const CASID &ID : Refs)
-      H.updateObjectRef(ID);
+    for (const Reference &Ref : Refs)
+      H.updateRef(CAS, Ref);
     H.updateArray(Data);
     return H.finish();
   }
@@ -125,14 +120,50 @@ private:
     Hasher.update((uint8_t)Kind);
   }
 
+  void updateKind(StableReferenceKind Kind) {
+    static_assert(sizeof(Kind) == 1, "Expected kind to be 1-byte");
+    Hasher.update((uint8_t)Kind);
+  }
+
   void updateString(StringRef String) {
     updateArray(makeArrayRef(String.data(), String.size()));
   }
 
-  void updateObjectRef(CASID ObjectRef) {
+  void updateRef(const CASDB &CAS, Reference Ref) {
+    if (Optional<CASID> ID = CAS.getObjectID(Ref)) {
+      updateKind(StableReferenceKind::Object);
+      updateID(*ID);
+      return;
+    }
+
+    Optional<RawDataHandle> Data = CAS.getRawData(Ref);
+    assert(Data && "Expected first-class object or raw data!");
+
+    updateKind(StableReferenceKind::Data);
+    updateSize(CAS.getDataSize(*Data));
+    class HashingStream final : public raw_ostream {
+    public:
+      HashingStream(HasherT &Hasher) : Hasher(Hasher) { SetUnbuffered(); }
+
+      uint64_t current_pos() const final { return CurrentPos; }
+      void write_impl(const char *Ptr, size_t Size) final {
+        Hasher.update(
+            makeArrayRef(reinterpret_cast<const uint8_t *>(Ptr), Size));
+        CurrentPos += Size;
+      }
+
+    private:
+      HasherT &Hasher;
+      uint64_t CurrentPos = 0;
+    };
+    HashingStream OS(Hasher);
+    CAS.readData(*Data, OS);
+  }
+
+  void updateID(const CASID &ID) {
     // NOTE: Does not hash the size of the hash. That's a CAS implementation
     // detail that shouldn't leak into the UUID for an object.
-    ArrayRef<uint8_t> Hash = ObjectRef.getHash();
+    ArrayRef<uint8_t> Hash = ID.getHash();
     assert(Hash.size() == sizeof(HashT) &&
            "Expected object ref to match the hash size");
     Hasher.update(Hash);
