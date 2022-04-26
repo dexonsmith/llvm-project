@@ -486,12 +486,12 @@ public:
   Optional<NamedTreeEntry> lookup(StringRef Name) const {
     if (Optional<size_t> I = getCAS().lookupTreeEntry(
             *static_cast<const TreeHandle *>(this), Name))
-      return getCAS().loadTreeEntry(*this, *I);
+      return get(*I);
     return None;
   }
 
   NamedTreeEntry get(size_t I) const {
-    return getCAS().loadTreeEntry(*this, I);
+    return getCAS().loadTreeEntry(*static_cast<const TreeHandle *>(this), I);
   }
 
   /// Visit each tree entry in order, returning an error from \p Callback to
@@ -521,7 +521,9 @@ private:
 class NodeProxy : public ProxyBase<NodeHandle> {
 public:
   size_t getNumReferences() const { return NumReferences; }
-  Reference getReference(size_t I) const { return getCAS().readRef(*this, I); }
+  Reference getReference(size_t I) const {
+    return getCAS().readRef(*static_cast<const NodeHandle *>(this), I);
+  }
 
   // FIXME: Remove this.
   CASID getReferenceID(size_t I) const {
