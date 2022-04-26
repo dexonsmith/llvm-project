@@ -484,7 +484,8 @@ public:
   size_t size() const { return NumEntries; }
 
   Optional<NamedTreeEntry> lookup(StringRef Name) const {
-    if (Optional<size_t> I = getCAS().lookupTreeEntry(*this, Name))
+    if (Optional<size_t> I = getCAS().lookupTreeEntry(
+            *static_cast<const TreeHandle *>(this), Name))
       return getCAS().loadTreeEntry(*this, *I);
     return None;
   }
@@ -497,7 +498,8 @@ public:
   /// stop early.
   Error
   forEachEntry(function_ref<Error(const NamedTreeEntry &)> Callback) const {
-    return getCAS().forEachTreeEntry(*this, Callback);
+    return getCAS().forEachTreeEntry(*static_cast<const TreeHandle *>(this),
+                                     Callback);
   }
 
   TreeProxy() = delete;
@@ -531,14 +533,16 @@ public:
   /// Visit each reference in order, returning an error from \p Callback to
   /// stop early.
   Error forEachReference(function_ref<Error(Reference)> Callback) const {
-    return getCAS().forEachRef(*this, Callback);
+    return getCAS().forEachRef(*static_cast<const NodeHandle *>(this),
+                               Callback);
   }
   Error forEachReferenceID(function_ref<Error(CASID)> Callback) const {
-    return getCAS().forEachRef(*this, [&](Reference Ref) {
-      Optional<CASID> ID = getCAS().getObjectID(Ref);
-      assert(ID && "Expected reference to be first-class object");
-      return Callback(*ID);
-    });
+    return getCAS().forEachRef(
+        *static_cast<const NodeHandle *>(this), [&](Reference Ref) {
+          Optional<CASID> ID = getCAS().getObjectID(Ref);
+          assert(ID && "Expected reference to be first-class object");
+          return Callback(*ID);
+        });
   }
 
   /// Get the content of the node. Valid as long as the CAS is valid.
