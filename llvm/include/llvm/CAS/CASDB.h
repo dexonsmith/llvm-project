@@ -439,7 +439,7 @@ template <class HandleT> class ProxyBase : public HandleT {
 public:
   const CASDB &getCAS() const { return *CAS; }
   CASID getID() const {
-    return CAS->getObjectID(*static_cast<const HandleT *>(this));
+    return CAS->getObjectID(*static_cast<const ObjectHandle *>(this));
   }
 
   /// FIXME: Remove this.
