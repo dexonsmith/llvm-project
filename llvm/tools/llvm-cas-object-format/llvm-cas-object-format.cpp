@@ -408,8 +408,8 @@ void StatCollector::visitPOT(ExitOnError &ExitOnErr, ArrayRef<CASID> TopLevels,
 void StatCollector::visitPOTItem(ExitOnError &ExitOnErr, const POTItem &Item) {
   cas::CASID ID = Item.ID;
   size_t NumPaths = Nodes.lookup(ID).NumPaths;
-  Optional<ObjectKind> Kind = CAS.getObjectKind(ID);
-  assert(Kind);
+  Optional<AnyObjectHandle> Object = ExitOnErr(CAS.loadObject(ID));
+  assert(Object);
 
   auto updateChild = [&](CASID Child) {
     ++Nodes[Child].NumParents;
@@ -417,23 +417,20 @@ void StatCollector::visitPOTItem(ExitOnError &ExitOnErr, const POTItem &Item) {
   };
 
   size_t NumParents = Nodes.lookup(ID).NumParents;
-  if (*Kind == ObjectKind::Blob && Item.Schema)
-    Kind = ObjectKind::Node; // Hack because nodes with no references look
-                             // like blobs.
-  if (*Kind == ObjectKind::Blob) {
+  if (auto Blob = Object->dyn_cast<BlobHandle>()) {
     auto &Info = Stats["builtin:blob"];
     ++Info.Count;
-    Info.DataSize += ExitOnErr(CAS.getBlob(ID)).getData().size();
+    Info.DataSize += CAS.getDataSize(Blob->getData());
     Info.NumPaths += NumPaths;
     Info.NumParents += NumParents;
     Totals.NumPaths += NumPaths; // Count paths to leafs.
     return;
   }
 
-  if (*Kind == ObjectKind::Tree) {
+  if (auto TreeH = Object->dyn_cast<TreeHandle>()) {
     auto &Info = Stats["builtin:tree"];
     ++Info.Count;
-    TreeProxy Tree = ExitOnErr(CAS.getTree(ID));
+    TreeProxy Tree = TreeProxy::load(CAS, *TreeH);
     Info.NumChildren += Tree.size();
     Info.NumParents += NumParents;
     Info.NumPaths += NumPaths;
@@ -450,8 +447,7 @@ void StatCollector::visitPOTItem(ExitOnError &ExitOnErr, const POTItem &Item) {
     return;
   }
 
-  assert(*Kind == ObjectKind::Node);
-  cas::NodeProxy Node = ExitOnErr(CAS.getNode(ID));
+  NodeProxy Node = NodeProxy::load(CAS, Object->get<NodeHandle>());
   auto addNodeStats = [&](ObjectKindInfo &Info) {
     ++Info.Count;
     Info.NumChildren += Node.getNumReferences();
@@ -461,7 +457,7 @@ void StatCollector::visitPOTItem(ExitOnError &ExitOnErr, const POTItem &Item) {
     if (!Node.getNumReferences())
       Totals.NumPaths += NumPaths; // Count paths to leafs.
 
-    ExitOnErr(Node.forEachReference([&](CASID ChildID) {
+    ExitOnErr(Node.forEachReferenceID([&](CASID ChildID) {
       updateChild(ChildID);
       return Error::success();
     }));
@@ -609,19 +605,18 @@ static void computeStats(CASDB &CAS, ArrayRef<CASID> TopLevels,
     Worklist.back().Visited = true;
 
     // FIXME: Maybe this should just assert?
-    Optional<ObjectKind> Kind = CAS.getObjectKind(ID);
-    assert(Kind);
-    if (!Kind) {
+    Optional<AnyObjectHandle> Object = ExitOnErr(CAS.loadObject(ID));
+    assert(Object);
+    if (!Object) {
       Worklist.pop_back();
       continue;
     }
 
-    if (*Kind == ObjectKind::Blob)
+    if (Object->is<BlobHandle>())
       continue;
 
-    if (*Kind == ObjectKind::Tree) {
-      TreeProxy Tree = ExitOnErr(CAS.getTree(ID));
-      ExitOnErr(Tree.forEachEntry([&](const NamedTreeEntry &Entry) {
+    if (auto Tree = Object->dyn_cast<TreeHandle>()) {
+      ExitOnErr(CAS.forEachTreeEntry(*Tree, [&](const NamedTreeEntry &Entry) {
         SmallString<128> PathStorage = Name;
         sys::path::append(PathStorage, sys::path::Style::posix,
                           Entry.getName());
@@ -635,8 +630,7 @@ static void computeStats(CASDB &CAS, ArrayRef<CASID> TopLevels,
       continue;
     }
 
-    assert(*Kind == ObjectKind::Node);
-    NodeProxy Node = ExitOnErr(CAS.getNode(ID));
+    NodeProxy Node = NodeProxy::load(CAS, Object->get<NodeHandle>());
     const SchemaBase *&Schema = Worklist.back().Schema;
 
     // Update the schema.
@@ -648,7 +642,7 @@ static void computeStats(CASDB &CAS, ArrayRef<CASID> TopLevels,
       Schema = nullptr;
     }
 
-    ExitOnErr(Node.forEachReference([&, Schema](CASID ChildID) {
+    ExitOnErr(Node.forEachReferenceID([&, Schema](CASID ChildID) {
       push(ChildID, "", Schema);
       return Error::success();
     }));

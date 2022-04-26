@@ -279,24 +279,22 @@ int catNodeData(CASDB &CAS, CASID ID) {
   return 0;
 }
 
+static StringRef getKindString(AnyObjectHandle Object) {
+  if (Object.is<BlobHandle>())
+    return "blob";
+  if (Object.is<TreeHandle>())
+    return "tree";
+  assert(Object.is<NodeHandle>());
+  return "node";
+}
+
 int printKind(CASDB &CAS, CASID ID) {
   ExitOnError ExitOnErr("llvm-cas: print-kind: ");
-  Optional<ObjectKind> Kind = CAS.getObjectKind(ID);
-  if (!Kind)
+  Optional<AnyObjectHandle> Object = ExitOnErr(CAS.loadObject(ID));
+  if (!Object)
     ExitOnErr(createStringError(inconvertibleErrorCode(), "unknown object"));
 
-  switch (*Kind) {
-  case ObjectKind::Blob:
-    llvm::outs() << "blob\n";
-    break;
-  case ObjectKind::Tree:
-    llvm::outs() << "tree\n";
-    break;
-  case ObjectKind::Node:
-    llvm::outs() << "node";
-    break;
-  }
-
+  llvm::outs() << getKindString(*Object) << "\n";
   return 0;
 }
 
@@ -304,7 +302,7 @@ int listObjectReferences(CASDB &CAS, CASID ID) {
   ExitOnError ExitOnErr("llvm-cas: ls-node-refs: ");
 
   NodeProxy Object = ExitOnErr(CAS.getNode(ID));
-  ExitOnErr(Object.forEachReference([&](CASID ID) -> Error {
+  ExitOnErr(Object.forEachReferenceID([&](CASID ID) -> Error {
     llvm::outs() << ID << "\n";
     return Error::success();
   }));
@@ -320,7 +318,7 @@ static int makeNode(CASDB &CAS, ArrayRef<std::string> Objects, StringRef DataPat
   for (StringRef Object : Objects) {
     ExitOnError ObjectErr("llvm-cas: make-node: ref: ");
     CASID ID = ObjectErr(CAS.parseID(Object));
-    if (!CAS.isKnownObject(ID))
+    if (!CAS.getReference(ID))
       ObjectErr(createStringError(inconvertibleErrorCode(),
                                   "unknown object '" + Object + "'"));
     IDs.push_back(ID);
@@ -356,25 +354,21 @@ static GraphInfo traverseObjectGraph(CASDB &CAS, CASID TopLevel) {
     }
     Worklist.back().second = true;
     CASID ID = Worklist.back().first;
-    Optional<ObjectKind> Kind = CAS.getObjectKind(ID);
-    assert(Kind);
-
-    if (*Kind == ObjectKind::Blob)
+    Optional<AnyObjectHandle> Object = ExitOnErr(CAS.loadObject(ID));
+    if (!Object || Object->is<BlobHandle>())
       continue;
 
-    if (*Kind == ObjectKind::Tree) {
-      TreeProxy Tree = ExitOnErr(CAS.getTree(ID));
-      ExitOnErr(Tree.forEachEntry([&](const NamedTreeEntry &Entry) {
+    if (auto Tree = Object->dyn_cast<TreeHandle>()) {
+      ExitOnErr(CAS.forEachTreeEntry(*Tree, [&](const NamedTreeEntry &Entry) {
         push(Entry.getID());
         return Error::success();
       }));
       continue;
     }
 
-    assert(*Kind == ObjectKind::Node);
-    NodeProxy Object = ExitOnErr(CAS.getNode(ID));
-    ExitOnErr(Object.forEachReference([&](CASID ID) {
-      push(ID);
+    auto Node = Object->get<NodeHandle>();
+    ExitOnErr(CAS.forEachRef(Node, [&](Reference Ref) {
+      push(*CAS.getObjectID(Ref));
       return Error::success();
     }));
   }
@@ -391,19 +385,8 @@ static void printDiffs(CASDB &CAS, const GraphInfo &Baseline,
       continue;
 
     StringRef KindString;
-    if (Optional<ObjectKind> Kind = CAS.getObjectKind(ID)) {
-      switch (*Kind) {
-      case ObjectKind::Blob:
-        KindString = "blob";
-        break;
-      case ObjectKind::Tree:
-        KindString = "tree";
-        break;
-      default:
-        KindString = "node";
-        break;
-      }
-    }
+    if (Optional<AnyObjectHandle> Object = ExitOnErr(CAS.loadObject(ID)))
+      KindString = getKindString(*Object);
 
     outs() << llvm::formatv("{0}{1,-4} {2}\n", NewName, KindString, ID);
   }
