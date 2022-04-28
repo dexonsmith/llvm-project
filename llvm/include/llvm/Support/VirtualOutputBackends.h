@@ -26,6 +26,12 @@ IntrusiveRefCntPtr<OutputBackend> makeFilteringOutputBackend(
     IntrusiveRefCntPtr<OutputBackend> UnderlyingBackend,
     std::function<bool(StringRef, Optional<OutputConfig>)> Filter);
 
+/// Create a backend that forwards \a OutputBackend::createFile() to both \p
+/// Backend1 and \p Backend2 and sends content to both places.
+IntrusiveRefCntPtr<OutputBackend>
+makeMirroringOutputBackend(IntrusiveRefCntPtr<OutputBackend> Backend1,
+                           IntrusiveRefCntPtr<OutputBackend> Backend2);
+
 /// A helper class for proxying another backend, with the default
 /// implementation to forward to the underlying backend.
 class ProxyOutputBackend : public OutputBackend {

@@ -612,4 +612,157 @@ TEST(VirtualOutputBackendAdaptors, makeFilteringOutputBackend) {
   SmallString<128> Path;
 }
 
+class AbsolutePathBackend : public ProxyOutputBackend {
+  IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
+    llvm_unreachable("unimplemented");
+  }
+
+  Expected<std::unique_ptr<OutputFileImpl>>
+  createFileImpl(StringRef Path, Optional<OutputConfig> Config) override {
+    assert(!sys::path::is_absolute(Path) &&
+           "Expected tests to pass all relative paths");
+    SmallString<256> AbsPath;
+    sys::path::append(AbsPath, CWD, Path);
+    return ProxyOutputBackend::createFileImpl(AbsPath, Config);
+  }
+
+public:
+  AbsolutePathBackend(const Twine &CWD,
+                      IntrusiveRefCntPtr<OutputBackend> Backend)
+      : ProxyOutputBackend(std::move(Backend)), CWD(CWD.str()) {
+    assert(sys::path::is_absolute(this->CWD) &&
+           "Expected tests to pass a relative path");
+  }
+
+private:
+  std::string CWD;
+};
+
+TEST(VirtualOutputBackendAdaptors, makeMirroringOutputBackend) {
+  unittest::TempDir D1("MirroringOutputBackendTest.1.d", /*Unique=*/true);
+  unittest::TempDir D2("MirroringOutputBackendTest.2.d", /*Unique=*/true);
+
+  IntrusiveRefCntPtr<OutputBackend> Backend;
+  {
+    auto OnDisk = makeIntrusiveRefCnt<OnDiskOutputBackend>();
+    Backend = makeMirroringOutputBackend(
+        makeIntrusiveRefCnt<AbsolutePathBackend>(D1.path(), OnDisk),
+        makeIntrusiveRefCnt<AbsolutePathBackend>(D2.path(), OnDisk));
+  }
+
+  OnDiskFile OnDisk1(D1, "file");
+  OnDiskFile OnDisk2(D2, "file");
+  OutputFile Output;
+  ASSERT_THAT_ERROR(
+      consumeDiscardOnDestroy(Backend->createFile("file")).moveInto(Output),
+      Succeeded());
+  EXPECT_TRUE(OnDisk1.findTemp());
+  EXPECT_TRUE(OnDisk2.findTemp());
+
+  Output << "content";
+  Output.getOS().pwrite("ON", /*Size=*/2, /*Offset=*/1);
+  EXPECT_THAT_ERROR(Output.keep(), Succeeded());
+  EXPECT_EQ(StringRef("cONtent"), OnDisk1.getCurrentContent());
+  EXPECT_EQ(StringRef("cONtent"), OnDisk2.getCurrentContent());
+  EXPECT_NE(OnDisk1.getCurrentUniqueID(), OnDisk2.getCurrentUniqueID());
+}
+
+/// Behaves like NullOutputFileImpl, but doesn't match the RTTI (so OutputFile
+/// cannot tell).
+class LikeNullOutputFile final : public OutputFileImpl {
+  Error keep() final { return Error::success(); }
+  Error discard() final { return Error::success(); }
+  raw_pwrite_stream &getOS() final { return OS; }
+
+public:
+  LikeNullOutputFile(raw_null_ostream &OS) : OS(OS) {}
+  raw_null_ostream &OS;
+};
+class LikeNullOutputBackend final : public OutputBackend {
+  IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
+    llvm_unreachable("not implemented");
+  }
+
+  Expected<std::unique_ptr<OutputFileImpl>>
+  createFileImpl(StringRef Path, Optional<OutputConfig> Config) override {
+    return std::make_unique<LikeNullOutputFile>(OS);
+  }
+
+public:
+  raw_null_ostream OS;
+};
+
+TEST(VirtualOutputBackendAdaptors, makeMirroringOutputBackendNull) {
+  // Check that null outputs are skipped by seeing that LikeNull->OS is passed
+  // through directly (without a mirroring proxy stream) to Output.
+  auto LikeNull = makeIntrusiveRefCnt<LikeNullOutputBackend>();
+  auto Null1 = makeNullOutputBackend();
+  auto Mirror = makeMirroringOutputBackend(Null1, LikeNull);
+  OutputFile Output;
+  ASSERT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).moveInto(Output),
+      Succeeded());
+  EXPECT_TRUE(!Output.isNull());
+  EXPECT_EQ(&Output.getOS(), &LikeNull->OS);
+
+  // Check the other direction.
+  Mirror = makeMirroringOutputBackend(LikeNull, Null1);
+  ASSERT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).moveInto(Output),
+      Succeeded());
+  EXPECT_TRUE(!Output.isNull());
+  EXPECT_EQ(&Output.getOS(), &LikeNull->OS);
+
+  // Same null backend, twice.
+  Mirror = makeMirroringOutputBackend(Null1, Null1);
+  ASSERT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).moveInto(Output),
+      Succeeded());
+  EXPECT_TRUE(Output.isNull());
+
+  // Two null backends.
+  auto Null2 = makeNullOutputBackend();
+  Mirror = makeMirroringOutputBackend(Null1, Null2);
+  ASSERT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).moveInto(Output),
+      Succeeded());
+  EXPECT_TRUE(Output.isNull());
+}
+
+class StringErrorBackend final : public OutputBackend {
+  IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
+    llvm_unreachable("not implemented");
+  }
+
+  Expected<std::unique_ptr<OutputFileImpl>>
+  createFileImpl(StringRef Path, Optional<OutputConfig> Config) override {
+    return createStringError(inconvertibleErrorCode(), Msg);
+  }
+
+public:
+  StringErrorBackend(const Twine &Msg) : Msg(Msg.str()) {}
+  std::string Msg;
+};
+
+TEST(VirtualOutputBackendAdaptors, makeMirroringOutputBackendCreateError) {
+  auto Error1 = makeIntrusiveRefCnt<StringErrorBackend>("error-backend-1");
+  auto Null = makeNullOutputBackend();
+
+  auto Mirror = makeMirroringOutputBackend(Null, Error1);
+  EXPECT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).takeError(),
+      FailedWithMessage(Error1->Msg));
+
+  Mirror = makeMirroringOutputBackend(Error1, Null);
+  EXPECT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).takeError(),
+      FailedWithMessage(Error1->Msg));
+
+  auto Error2 = makeIntrusiveRefCnt<StringErrorBackend>("error-backend-2");
+  Mirror = makeMirroringOutputBackend(Error1, Error2);
+  EXPECT_THAT_ERROR(
+      consumeDiscardOnDestroy(Mirror->createFile("file")).takeError(),
+      FailedWithMessage(Error1->Msg));
+}
+
 } // end namespace

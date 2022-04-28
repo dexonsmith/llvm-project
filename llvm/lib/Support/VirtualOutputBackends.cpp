@@ -67,6 +67,116 @@ IntrusiveRefCntPtr<OutputBackend> vfs::makeFilteringOutputBackend(
       std::move(UnderlyingBackend), std::move(Filter));
 }
 
+IntrusiveRefCntPtr<OutputBackend>
+vfs::makeMirroringOutputBackend(IntrusiveRefCntPtr<OutputBackend> Backend1,
+                                IntrusiveRefCntPtr<OutputBackend> Backend2) {
+  struct ProxyOutputBackend1 : public ProxyOutputBackend {
+    using ProxyOutputBackend::ProxyOutputBackend;
+  };
+  struct ProxyOutputBackend2 : public ProxyOutputBackend {
+    using ProxyOutputBackend::ProxyOutputBackend;
+  };
+  struct MirroringOutput final : public OutputFileImpl, raw_pwrite_stream {
+    Error keep() final {
+      flush();
+      return joinErrors(F1->keep(), F2->keep());
+    }
+    Error discard() final {
+      flush();
+      return joinErrors(F1->discard(), F2->discard());
+    }
+    raw_pwrite_stream &getOS() final { return *this; }
+
+    void write_impl(const char *Ptr, size_t Size) override {
+      F1->getOS().write(Ptr, Size);
+      F2->getOS().write(Ptr, Size);
+    }
+    void pwrite_impl(const char *Ptr, size_t Size, uint64_t Offset) override {
+      this->flush();
+      F1->getOS().pwrite(Ptr, Size, Offset);
+      F2->getOS().pwrite(Ptr, Size, Offset);
+    }
+    uint64_t current_pos() const override { return F1->getOS().tell(); }
+    size_t preferred_buffer_size() const override {
+      return PreferredBufferSize;
+    }
+    void reserveExtraSpace(uint64_t ExtraSize) override {
+      F1->getOS().reserveExtraSpace(ExtraSize);
+      F2->getOS().reserveExtraSpace(ExtraSize);
+    }
+    bool is_displayed() const override {
+      return F1->getOS().is_displayed() && F2->getOS().is_displayed();
+    }
+    bool has_colors() const override {
+      return F1->getOS().has_colors() && F2->getOS().has_colors();
+    }
+    void enable_colors(bool enable) override {
+      raw_pwrite_stream::enable_colors(enable);
+      F1->getOS().enable_colors(enable);
+      F2->getOS().enable_colors(enable);
+    }
+
+    MirroringOutput(std::unique_ptr<OutputFileImpl> F1,
+                    std::unique_ptr<OutputFileImpl> F2)
+        : PreferredBufferSize(std::max(F1->getOS().GetBufferSize(),
+                                       F1->getOS().GetBufferSize())),
+          F1(std::move(F1)), F2(std::move(F2)) {
+      // Don't double buffer.
+      this->F1->getOS().SetUnbuffered();
+      this->F2->getOS().SetUnbuffered();
+    }
+    size_t PreferredBufferSize;
+    std::unique_ptr<OutputFileImpl> F1;
+    std::unique_ptr<OutputFileImpl> F2;
+  };
+  struct MirroringOutputBackend : public ProxyOutputBackend1,
+                                  public ProxyOutputBackend2 {
+    Expected<std::unique_ptr<OutputFileImpl>>
+    createFileImpl(StringRef Path, Optional<OutputConfig> Config) override {
+      std::unique_ptr<OutputFileImpl> File1;
+      std::unique_ptr<OutputFileImpl> File2;
+      if (Error E =
+              ProxyOutputBackend1::createFileImpl(Path, Config).moveInto(File1))
+        return std::move(E);
+      if (Error E =
+              ProxyOutputBackend2::createFileImpl(Path, Config).moveInto(File2))
+        return joinErrors(std::move(E), File1->discard());
+
+      // Skip the extra indirection if one of these is a null output.
+      if (isa<NullOutputFileImpl>(*File1)) {
+        consumeError(File1->discard());
+        return std::move(File2);
+      }
+      if (isa<NullOutputFileImpl>(*File2)) {
+        consumeError(File2->discard());
+        return std::move(File1);
+      }
+      return std::make_unique<MirroringOutput>(std::move(File1),
+                                               std::move(File2));
+    }
+
+    IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
+      return IntrusiveRefCntPtr<ProxyOutputBackend1>(
+          makeIntrusiveRefCnt<MirroringOutputBackend>(
+              ProxyOutputBackend1::getUnderlyingBackend().clone(),
+              ProxyOutputBackend2::getUnderlyingBackend().clone()));
+    }
+    void Retain() const { ProxyOutputBackend1::Retain(); }
+    void Release() const { ProxyOutputBackend1::Release(); }
+
+    MirroringOutputBackend(IntrusiveRefCntPtr<OutputBackend> Backend1,
+                           IntrusiveRefCntPtr<OutputBackend> Backend2)
+        : ProxyOutputBackend1(std::move(Backend1)),
+          ProxyOutputBackend2(std::move(Backend2)) {}
+  };
+
+  assert(Backend1 && "Expected actual backend");
+  assert(Backend2 && "Expected actual backend");
+  return IntrusiveRefCntPtr<ProxyOutputBackend1>(
+      makeIntrusiveRefCnt<MirroringOutputBackend>(std::move(Backend1),
+                                                  std::move(Backend2)));
+}
+
 static OutputConfig
 applySettings(Optional<OutputConfig> &&Config,
               const OnDiskOutputBackend::OutputSettings &Settings) {
