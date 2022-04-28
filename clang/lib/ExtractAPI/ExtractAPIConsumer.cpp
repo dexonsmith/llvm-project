@@ -793,7 +793,7 @@ void ExtractAPIAction::EndSourceFileAction() {
   // FIXME: Make the kind of APISerializer configurable.
   SymbolGraphSerializer SGSerializer(*API, ProductName);
   SGSerializer.serialize(*OS);
-  OS->flush();
+  OS = nullptr;
 }
 
 std::unique_ptr<raw_pwrite_stream>
