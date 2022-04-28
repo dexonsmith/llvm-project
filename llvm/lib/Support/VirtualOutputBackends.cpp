@@ -20,26 +20,51 @@
 using namespace llvm;
 using namespace llvm::vfs;
 
+void ProxyOutputBackend::anchor() {}
 void OnDiskOutputBackend::anchor() {}
 
 IntrusiveRefCntPtr<OutputBackend> vfs::makeNullOutputBackend() {
   struct NullOutputBackend : public OutputBackend {
-    struct NullOutput final : public OutputFileImpl {
-      Error keep() override { return Error::success(); }
-      Error discard() override { return Error::success(); }
-      raw_pwrite_stream &getOS() override { return OS; }
-      raw_null_ostream OS;
-    };
     IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
       return const_cast<NullOutputBackend *>(this);
     }
     Expected<std::unique_ptr<OutputFileImpl>>
     createFileImpl(StringRef Path, Optional<OutputConfig>) override {
-      return std::make_unique<NullOutput>();
+      return std::make_unique<NullOutputFileImpl>();
     }
   };
 
   return makeIntrusiveRefCnt<NullOutputBackend>();
+}
+
+IntrusiveRefCntPtr<OutputBackend> vfs::makeFilteringOutputBackend(
+    IntrusiveRefCntPtr<OutputBackend> UnderlyingBackend,
+    std::function<bool(StringRef, Optional<OutputConfig>)> Filter) {
+  struct FilteringOutputBackend : public ProxyOutputBackend {
+    Expected<std::unique_ptr<OutputFileImpl>>
+    createFileImpl(StringRef Path, Optional<OutputConfig> Config) override {
+      if (Filter(Path, Config))
+        return ProxyOutputBackend::createFileImpl(Path, Config);
+      return std::make_unique<NullOutputFileImpl>();
+    }
+
+    IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override {
+      return makeIntrusiveRefCnt<FilteringOutputBackend>(
+          getUnderlyingBackend().clone(), Filter);
+    }
+
+    FilteringOutputBackend(
+        IntrusiveRefCntPtr<OutputBackend> UnderlyingBackend,
+        std::function<bool(StringRef, Optional<OutputConfig>)> Filter)
+        : ProxyOutputBackend(std::move(UnderlyingBackend)),
+          Filter(std::move(Filter)) {
+      assert(this->Filter && "Expected a non-null function");
+    }
+    std::function<bool(StringRef, Optional<OutputConfig>)> Filter;
+  };
+
+  return makeIntrusiveRefCnt<FilteringOutputBackend>(
+      std::move(UnderlyingBackend), std::move(Filter));
 }
 
 static OutputConfig

@@ -582,4 +582,34 @@ Error OnDiskOutputBackendProvider::checkDiscarded(StringRef FilePath) {
   return Error::success();
 }
 
+TEST(VirtualOutputBackendAdaptors, makeFilteringOutputBackend) {
+  bool ShouldCreate = false;
+  auto Backend = makeFilteringOutputBackend(
+      makeIntrusiveRefCnt<OnDiskOutputBackend>(),
+      [&ShouldCreate](StringRef, Optional<OutputConfig>) {
+        return ShouldCreate;
+      });
+
+  int Count = 0;
+  unittest::TempDir D("FilteringOutputBackendTest.d", /*Unique=*/true);
+  for (bool ShouldCreateVal : {false, true, true, false}) {
+    ShouldCreate = ShouldCreateVal;
+    OnDiskFile OnDisk(D, "file." + Twine(Count++) + "." + Twine(ShouldCreate));
+    OutputFile Output;
+    ASSERT_THAT_ERROR(consumeDiscardOnDestroy(Backend->createFile(OnDisk.Path))
+                          .moveInto(Output),
+                      Succeeded());
+    EXPECT_NE(ShouldCreate, Output.isNull());
+    Output << "content";
+    EXPECT_THAT_ERROR(Output.keep(), Succeeded());
+
+    if (ShouldCreate) {
+      EXPECT_EQ(StringRef("content"), OnDisk.getCurrentContent());
+    } else {
+      EXPECT_FALSE(OnDisk.getCurrentUniqueID());
+    }
+  }
+  SmallString<128> Path;
+}
+
 } // end namespace

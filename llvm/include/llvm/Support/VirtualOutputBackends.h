@@ -19,6 +19,43 @@ namespace vfs {
 /// Create a backend that ignores all output.
 IntrusiveRefCntPtr<OutputBackend> makeNullOutputBackend();
 
+/// Make a backend where \a OutputBackend::createFile() forwards to
+/// \p UnderlyingBackend when \p Filter is true, and otherwise returns a
+/// \a NullOutput.
+IntrusiveRefCntPtr<OutputBackend> makeFilteringOutputBackend(
+    IntrusiveRefCntPtr<OutputBackend> UnderlyingBackend,
+    std::function<bool(StringRef, Optional<OutputConfig>)> Filter);
+
+/// A helper class for proxying another backend, with the default
+/// implementation to forward to the underlying backend.
+class ProxyOutputBackend : public OutputBackend {
+  void anchor() override;
+
+protected:
+  // Require subclass to implement cloneImpl().
+  //
+  // IntrusiveRefCntPtr<OutputBackend> cloneImpl() const override;
+
+  Expected<std::unique_ptr<OutputFileImpl>>
+  createFileImpl(StringRef Path, Optional<OutputConfig> Config) override {
+    OutputFile File;
+    if (Error E = UnderlyingBackend->createFile(Path, Config).moveInto(File))
+      return std::move(E);
+    return File.takeImpl();
+  }
+
+  OutputBackend &getUnderlyingBackend() const { return *UnderlyingBackend; }
+
+public:
+  ProxyOutputBackend(IntrusiveRefCntPtr<OutputBackend> UnderlyingBackend)
+      : UnderlyingBackend(std::move(UnderlyingBackend)) {
+    assert(this->UnderlyingBackend && "Expected non-null backend");
+  }
+
+private:
+  IntrusiveRefCntPtr<OutputBackend> UnderlyingBackend;
+};
+
 /// An output backend that creates files on disk, wrapping APIs in sys::fs.
 class OnDiskOutputBackend : public OutputBackend {
   void anchor() override;

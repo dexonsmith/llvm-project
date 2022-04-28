@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/VirtualOutputFile.h"
+#include "llvm/Support/VirtualOutputBackends.h"
 #include "llvm/Support/VirtualOutputError.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/raw_ostream_proxy.h"
@@ -14,7 +15,11 @@
 using namespace llvm;
 using namespace llvm::vfs;
 
+char OutputFileImpl::ID = 0;
+char NullOutputFileImpl::ID = 0;
+
 void OutputFileImpl::anchor() {}
+void NullOutputFileImpl::anchor() {}
 
 class OutputFile::TrackedProxy : public raw_pwrite_stream_proxy {
 public:

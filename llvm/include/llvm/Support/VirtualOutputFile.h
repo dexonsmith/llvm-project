@@ -12,23 +12,39 @@
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ExtensibleRTTI.h"
 #include "llvm/Support/VirtualOutputError.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
 namespace vfs {
 
-class OutputFileImpl {
-protected:
-  virtual void anchor();
+class OutputFileImpl : public RTTIExtends<OutputFileImpl, RTTIRoot> {
+  void anchor() override;
 
 public:
+  static char ID;
   virtual ~OutputFileImpl() = default;
 
   virtual Error keep() = 0;
   virtual Error discard() = 0;
   virtual raw_pwrite_stream &getOS() = 0;
+};
+
+class NullOutputFileImpl final
+    : public RTTIExtends<NullOutputFileImpl, OutputFileImpl> {
+  void anchor() override;
+
+public:
+  static char ID;
+  Error keep() final { return Error::success(); }
+  Error discard() final { return Error::success(); }
+  raw_pwrite_stream &getOS() final { return OS; }
+
+private:
+  raw_null_ostream OS;
 };
 
 /// A virtualized output file that writes to a specific backend.
@@ -80,6 +96,19 @@ public:
   Expected<std::unique_ptr<raw_pwrite_stream>> createProxy();
 
   bool hasOpenProxy() const { return OpenProxy; }
+
+  /// Take the implementation.
+  ///
+  /// \pre \a hasOpenProxy() is false.
+  /// \pre \a discardOnDestroy() has not been called.
+  std::unique_ptr<OutputFileImpl> takeImpl() {
+    assert(!hasOpenProxy() && "Unexpected open proxy");
+    assert(!DiscardOnDestroyHandler && "Unexpected discard handler");
+    return std::move(Impl);
+  }
+
+  /// Check whether this is a null output file.
+  bool isNull() const { return Impl && isa<NullOutputFileImpl>(*Impl); }
 
   OutputFile() = default;
 
