@@ -33,6 +33,11 @@ namespace llvm {
 class raw_fd_ostream;
 class Timer;
 class TimerGroup;
+
+namespace vfs {
+class OutputBackend;
+class OutputFile;
+} // end namespace vfs
 }
 
 namespace clang {
@@ -81,6 +86,9 @@ class CompilerInstance : public ModuleLoader {
 
   /// Auxiliary Target info.
   IntrusiveRefCntPtr<TargetInfo> AuxTarget;
+
+  /// The output backend.
+  IntrusiveRefCntPtr<llvm::vfs::OutputBackend> OutputBackend;
 
   /// The file manager.
   IntrusiveRefCntPtr<FileManager> FileMgr;
@@ -157,21 +165,8 @@ class CompilerInstance : public ModuleLoader {
   /// The stream for verbose output.
   raw_ostream *VerboseOutputStream = &llvm::errs();
 
-  /// Holds information about the output file.
-  ///
-  /// If TempFilename is not empty we must rename it to Filename at the end.
-  /// TempFilename may be empty and Filename non-empty if creating the temporary
-  /// failed.
-  struct OutputFile {
-    std::string Filename;
-    Optional<llvm::sys::fs::TempFile> File;
-
-    OutputFile(std::string filename, Optional<llvm::sys::fs::TempFile> file)
-        : Filename(std::move(filename)), File(std::move(file)) {}
-  };
-
   /// The list of active output files.
-  std::list<OutputFile> OutputFiles;
+  std::list<llvm::vfs::OutputFile> OutputFiles;
 
   /// Force an output buffer.
   std::unique_ptr<llvm::raw_pwrite_stream> OutputStream;
@@ -391,6 +386,16 @@ public:
   /// {
 
   llvm::vfs::FileSystem &getVirtualFileSystem() const;
+
+  /// }
+  /// @name Output Backend
+  /// {
+
+  void setOutputBackend(IntrusiveRefCntPtr<llvm::vfs::OutputBackend> Value);
+  void createOutputBackend();
+  bool hasOutputBackend() const { return bool(OutputBackend); }
+  llvm::vfs::OutputBackend &getOutputBackend();
+  llvm::vfs::OutputBackend &getOrCreateOutputBackend();
 
   /// }
   /// @name File Manager
