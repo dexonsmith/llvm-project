@@ -32,7 +32,9 @@ public:
   /// separate clones of the same backend.
   IntrusiveRefCntPtr<OutputBackend> clone() const { return cloneImpl(); }
 
-  /// Create a file.
+  /// Create a file. If \p Config is \c None, uses the backend's default
+  /// OutputConfig (may match \a OutputConfig::OutputConfig(), or may
+  /// have been customized).
   ///
   /// Thread-safe.
   Expected<OutputFile> createFile(const Twine &Path,
