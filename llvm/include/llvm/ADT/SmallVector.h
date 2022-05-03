@@ -207,7 +207,7 @@ protected:
 
   /// Reserve enough space to add one element, and return the updated element
   /// pointer in case it was a reference to the storage.
-  template <class U>
+  template <class U, std::enable_if_t<!U::TakesParamByValue, bool> = false>
   static const T *reserveForParamAndGetAddressImpl(U *This, const T &Elt,
                                                    size_t N) {
     size_t NewSize = This->size() + N;
@@ -224,6 +224,22 @@ protected:
     }
     This->grow(NewSize);
     return ReferencesStorage ? This->begin() + Index : &Elt;
+  }
+
+  /// Reserve enough space to add one element and then return the address of
+  /// the argument, for when the argument was taken by value.
+  ///
+  /// This is hand-optimized to skip the call to \a isReferenceToStorage(),
+  /// even though the optimizer should be able to figure that out itself.
+  template <class U, std::enable_if_t<U::TakesParamByValue, bool> = false>
+  static const T *reserveForParamAndGetAddressImpl(U *This, const T &Elt,
+                                                  size_t N) {
+    size_t NewSize = This->size() + N;
+    if (LLVM_LIKELY(NewSize <= This->capacity()))
+      return &Elt;
+
+    This->grow(NewSize);
+    return &Elt;
   }
 
 public:
