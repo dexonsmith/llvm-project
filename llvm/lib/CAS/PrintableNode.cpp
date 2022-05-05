@@ -12,7 +12,6 @@
 using namespace llvm;
 using namespace llvm::cas;
 
-
 char PrintableNodeSchema::ID = 0;
 void PrintableNodeSchema::anchor() {}
 
@@ -51,11 +50,13 @@ Expected<PrintableNodeSchema> PrintableNodeSchema::get(CASDB &CAS) {
     return TypeID.takeError();
 }
 
-void PrintableNodeBuilder::addObject(ObjectHandle Handle, Optional<StringRef> Name) {
+void PrintableNodeBuilder::addObject(ObjectHandle Handle,
+                                     Optional<StringRef> Name) {
   return addObject(CAS.getReference(Handle), Name);
 }
 
-void PrintableNodeBuilder::addPrintableString(StringRef String, Optional<StringRef> Name) {
+void PrintableNodeBuilder::addPrintableString(StringRef String,
+                                              Optional<StringRef> Name) {
   auto Kind = FieldKind::PrintableString;
   if (String.size() <= 16U)
     saveField(FieldValue(Kind, saveString(String)), Name);
@@ -63,7 +64,8 @@ void PrintableNodeBuilder::addPrintableString(StringRef String, Optional<StringR
     outlineField(Kind, arrayRefFromStringRef<char>(String), Name);
 }
 
-void PrintableNodeBuilder::addOpaqueData(ArrayRef<char> Data, Optional<StringRef> Name) {
+void PrintableNodeBuilder::addOpaqueData(ArrayRef<char> Data,
+                                         Optional<StringRef> Name) {
   auto Kind = FieldKind::OpaqueData;
   if (Data.size() <= 16U)
     saveField(FieldValue(Kind, saveString(toStringRef(Data))), Name);
@@ -103,11 +105,13 @@ Expected<NodeHandle> PrintableNodeBuilder::build() {
     return std::move(DelayedError);
 
   // Sort strings and assign numbers.
-  llvm::sort(Strings, [](StringMapEntry<StringInfo> *LHS, StringMapEntry<StringInfo> *RHS) {
+  llvm::sort(Strings, [](StringMapEntry<StringInfo> *LHS,
+                         StringMapEntry<StringInfo> *RHS) {
     return LHS->first() < RHS->first();
-    });
+  });
   if (Strings.size() > UINT16_MAX)
-    return createStringError(inconvertibleErrorCode(), "Too many strings in NodeBuilder");
+    return createStringError(inconvertibleErrorCode(),
+                             "Too many strings in NodeBuilder");
   size_t NextOffset = 0;
   using StringSizeT = uint16_t;
   for (size_t I = 0, E = Strings.size(); I != E; ++I) {
@@ -190,12 +194,16 @@ Expected<NodeHandle> PrintableNodeBuilder::build() {
       describeField(*I->second);
     }
     assert(NamedFields.size() == NamedFieldsMap.size());
-    assert(NumRefFields + NumStringFields + NumNumber32Fields + NumNumber64Fields ==
-               UnnamedFields.size() + NamedFields.size());
+    assert(NumRefFields + NumStringFields + NumNumber32Fields +
+               NumNumber64Fields ==
+           UnnamedFields.size() + NamedFields.size());
     endian::write(&LayoutManifest[RefsSlot], NumRefFields, endianness::little);
-    endian::write(&LayoutManifest[StringsSlot], NumStringFields, endianness::little);
-    endian::write(&LayoutManifest[Numbers32Slot], NumNumber32Fields, endianness::little);
-    endian::write(&LayoutManifest[Numbers64Slot], NumNumber64Fields, endianness::little);
+    endian::write(&LayoutManifest[StringsSlot], NumStringFields,
+                  endianness::little);
+    endian::write(&LayoutManifest[Numbers32Slot], NumNumber32Fields,
+                  endianness::little);
+    endian::write(&LayoutManifest[Numbers64Slot], NumNumber64Fields,
+                  endianness::little);
 
     if (KindName)
       writeString(*KindName);
@@ -243,8 +251,8 @@ Expected<NodeHandle> PrintableNodeBuilder::build() {
           Content = FV.String->Offset;
           break;
         case FieldValue::StorageClass::Number32:
-          Content = *FV.Number
-            break;
+          Content = *FV.Number;
+          break;
         case FieldValue::StorageClass::Number32:
           Content = NextNumber64++;
           break;
@@ -391,4 +399,3 @@ ObjectFormatNodeProxy::get(const ObjectFileSchema &Schema,
         "invalid kind-string for node in object-file-schema");
   return ObjectFormatNodeProxy(Schema, *Ref);
 }
-
