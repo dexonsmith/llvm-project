@@ -253,7 +253,7 @@ Expected<NodeHandle> PrintableNodeBuilder::build() {
         case FieldValue::StorageClass::Number32:
           Content = *FV.Number;
           break;
-        case FieldValue::StorageClass::Number32:
+        case FieldValue::StorageClass::Number64:
           Content = NextNumber64++;
           break;
         }
