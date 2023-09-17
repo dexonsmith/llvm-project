@@ -1,0 +1,79 @@
+module LLVM_C {
+  umbrella "llvm-c"
+  module * { export * }
+}
+
+extern module LLVM_Extern_Utils_DataTypes "module.extern.modulemap"
+
+// FIXME: Mislayered?
+module LLVM_Support_TargetRegistry {
+  requires cplusplus
+  header "llvm/Support/TargetRegistry.h"
+  export *
+}
+
+// A module covering ADT/ and Support/. These are intertwined and
+// codependent, and notionally form a single module.
+module LLVM_Utils {
+  module ADT {
+    requires cplusplus
+
+    umbrella "llvm/ADT"
+    module * { export * }
+  }
+
+  module Demangle {
+    requires cplusplus
+
+    umbrella "llvm/Demangle"
+    module * { export * }
+
+    textual header "llvm/Demangle/ItaniumNodes.def"
+  }
+
+  module Support {
+    requires cplusplus
+
+    umbrella "llvm/Support"
+    module * { export * }
+
+    // Exclude this; deprecated.
+    exclude header "llvm/Support/Host.h"
+
+    // Exclude this; it should only be used on Windows.
+    exclude header "llvm/Support/Windows/WindowsSupport.h"
+
+    // Exclude these; they are fundamentally non-modular.
+    exclude header "llvm/Support/PluginLoader.h"
+    exclude header "llvm/Support/Solaris/sys/regset.h"
+    textual header "llvm/Support/TargetOpcodes.def"
+
+  }
+
+  module TargetParser {
+    requires cplusplus
+
+    umbrella "llvm/TargetParser"
+    module * { export * }
+
+    // These are intended for textual inclusion.
+    textual header "llvm/TargetParser/ARMTargetParser.def"
+    textual header "llvm/TargetParser/CSKYTargetParser.def"
+    textual header "llvm/TargetParser/X86TargetParser.def"
+    textual header "llvm/TargetParser/LoongArchTargetParser.def"
+  }
+
+  // This part of the module is usable from both C and C++ code.
+  module ConvertUTF {
+    header "llvm/Support/ConvertUTF.h"
+    export *
+  }
+}
+
+// This is used for a $src == $build compilation. Otherwise we use
+// LLVM_Support_DataTypes_Build, defined in a module map that is
+// copied into the build area.
+module LLVM_Support_DataTypes_Src {
+  header "llvm/Support/DataTypes.h"
+  export *
+}
